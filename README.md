@@ -2,23 +2,63 @@
 
 Record all your interactions with Claude Code as you develop your projects. See everything Claude hides: system prompts, tool outputs, and raw API data in an intuitive web interface.
 
+**Fork of [mariozechner/claude-trace](https://github.com/mariozechner/claude-trace) with full [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) support** (native binary via reverse proxy).
+
+## Claude Code V2+ Support
+
+Claude Code V2 ships as a **native binary** (Mach-O on macOS, ELF on Linux, PE on Windows) instead of a Node.js script. The original interceptor approach (`node --require interceptor claude`) no longer works.
+
+This fork automatically detects the binary type and picks the right interception strategy:
+
+| Claude Code version | Binary type | Interception mode |
+|---------------------|-------------|-------------------|
+| V1.x | Node.js script | `interceptor-loader.js` injected via `--require` |
+| **V2+** | Native binary | Local **reverse proxy**; `ANTHROPIC_BASE_URL` redirected |
+
+When running against a native binary, claude-trace:
+
+1. Starts a local HTTP reverse proxy on `127.0.0.1`
+2. Points Claude Code at the proxy via `ANTHROPIC_BASE_URL`
+3. Forwards traffic to the real API (reads `~/.claude/settings.json` or `ANTHROPIC_BASE_URL` env)
+4. Logs all request/response pairs to `.claude-trace/` in real time
+
+If your `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, a temporary config directory is used so the original settings file is never modified.
+
 ## Install
+
+### From npm (when published)
 
 ```bash
 npm install -g @hanqunfeng/claude-trace
 ```
 
+### From source
+
+```bash
+git clone https://github.com/hanqunfeng/claude-trace.git
+cd claude-trace
+npm install    # also installs frontend deps via postinstall
+npm run build
+npm link       # optional: make `claude-trace` available globally
+```
+
 ## Usage
 
 ```bash
-# Start Claude Code with logging
+# Start Claude Code with logging (auto-detects V1 JS vs V2+ native binary)
 claude-trace
 
-# Include all API requests (by default, only substantial conversations are logged)
+# Include all API requests (by default, only /v1/messages are logged in proxy mode)
 claude-trace --include-all-requests
+
+# Log auth headers without redaction (use with care)
+claude-trace --include-sensitive-headers
 
 # Run Claude with specific arguments
 claude-trace --run-with chat --model sonnet-3.5
+
+# Use a custom Claude binary path
+claude-trace --claude-path /usr/local/Caskroom/claude-code/2.1.153/claude
 
 # Show help
 claude-trace --help
@@ -26,26 +66,43 @@ claude-trace --help
 # Extract OAuth token
 claude-trace --extract-token
 
-# Generate HTML report manually from previously logged .jsonl
+# Generate HTML report from previously logged .jsonl
 claude-trace --generate-html logs.jsonl report.html
 
-# Generate HTML including all requests (not just substantial conversations)
+# Generate HTML including all requests
 claude-trace --generate-html logs.jsonl --include-all-requests
 
 # Generate conversation summaries and searchable index
 claude-trace --index
 ```
 
-Logs are saved to `.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}` in your current directory. The HTML file is self-contained and opens in any browser without needing a server.
+Logs are saved to `.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in your current directory. The HTML file is self-contained and opens in any browser without needing a server.
+
+## CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--include-all-requests` | Log all API traffic, not just `/v1/messages` |
+| `--include-sensitive-headers` | Log auth tokens and cookies without redaction |
+| `--log NAME` | Custom log file base name (without extension) |
+| `--claude-path PATH` | Path to Claude binary (auto-detected if omitted) |
+| `--no-open` | Don't open generated HTML in browser |
+| `--run-with ARGS...` | Pass remaining arguments to Claude |
+| `--extract-token` | Extract OAuth token and exit |
+| `--generate-html FILE [OUT]` | Generate HTML report from JSONL |
+| `--index` | Generate conversation summaries and index |
 
 ## Request Filtering
 
-By default, claude-trace filters logs to focus on substantial conversations:
+**Proxy mode (Claude Code V2+):**
 
-- **Default behavior**: Only logs requests to `/v1/messages` with more than 2 messages in the conversation
-- **With `--include-all-requests`**: Logs all requests made to `api.anthropic.com` including single-message requests and other endpoints
+- **Default**: Logs requests to `/v1/messages`
+- **With `--include-all-requests`**: Logs all proxied API traffic
 
-This filtering reduces log file size and focuses on meaningful development sessions, while still allowing you to capture everything when needed for debugging.
+**Interceptor mode (Claude Code V1, Node.js):**
+
+- **Default**: Logs `/v1/messages` requests with more than 2 messages in context
+- **With `--include-all-requests`**: Logs all `api.anthropic.com` requests
 
 ## Conversation Indexing
 
@@ -75,81 +132,74 @@ This feature:
 - **Token usage** - Detailed breakdown including cache hits
 - **Raw JSONL logs** - Complete request/response pairs for analysis
 - **Interactive HTML viewer** - Browse conversations with model filtering
-- **Debug views** - Raw calls shows all HTTP requests without filtering; JSON debug shows processed API data
+- **Debug views** - Raw calls shows all HTTP requests; JSON debug shows processed API data
 - **Conversation indexing** - AI-generated summaries and searchable index of all sessions
 
 ## Requirements
 
 - Node.js 16+
-- Claude Code CLI installed
+- Claude Code CLI installed (V1 Node.js or **V2+ native binary**)
 
 ## Development
 
 ### Running in dev mode
 
 ```bash
-# Install dependencies
-npm install
-
-# Start dev mode
-npm run dev
+npm install      # installs root + frontend dependencies
+npm run dev      # predev compiles + copies JS loaders, then starts watchers
 ```
 
-Dev mode compiles both the main app (`src/`) and frontend (`frontend/src/`) with file watching. For frontend development, open `http://localhost:8080/test` to see live updates as you modify frontend code.
+Dev mode compiles both the main app (`src/`) and frontend (`frontend/src/`) with file watching. Open `http://localhost:8080/test` to preview the HTML viewer with sample data.
 
 ### Testing the CLI
 
 ```bash
-# Test compiled version
-node --no-deprecation dist/cli.js
+# Build first
+npm run build
 
-# Test TypeScript source directly
-npx tsx --no-deprecation src/cli.ts
+# Run compiled CLI
+node dist/cli.js
+
+# Type-check without emitting
+npm run typecheck
 ```
 
 ### Building
 
 ```bash
-# Build everything
 npm run build
-
-# Or build specific parts
-npm run build:backend  # CLI and interceptor
-npm run build:frontend # Web interface
 ```
 
 **Generated artifacts:**
 
-- `dist/` - Compiled CLI and interceptor JavaScript
+- `dist/` - Compiled CLI, interceptor, and reverse proxy
 - `frontend/dist/` - Bundled web interface (CSS + JS)
-- Built HTML generator that embeds the web interface
-
-The built artifacts are ready for npm publishing and include:
-
 - Self-contained HTML reports with embedded CSS/JS
-- Node.js CLI with mitmproxy integration
-- TypeScript definitions
 
 ### Architecture
 
-**Two-part system:**
+**Two-part system with dual interception:**
 
 1. **Backend** (`src/`)
 
-   - **CLI** (`cli.ts`) - Command-line interface and argument parsing. Launches Claude Code and injects interceptors
-   - **Interceptor** (`interceptor.ts`) - injects itself into Claude Code, intercepts calls to fetch(), and logs them to JSONL files in .claude-trace/ in the current working dir.
+   - **CLI** (`cli.ts`) - Detects native vs Node.js Claude binary; launches appropriate interception mode
+   - **Reverse Proxy** (`reverse-proxy.ts`) - **Claude Code V2+**: local HTTP proxy, logs traffic, generates HTML in real time
+   - **Interceptor** (`interceptor.ts`) - **Claude Code V1**: hooks `fetch()` inside Node.js Claude process
+   - **Interceptor Loader** (`interceptor-loader.js`) - `--require` hook for V1 Node.js entry
    - **HTML Generator** (`html-generator.ts`) - Embeds frontend into self-contained HTML reports
-   - **Index Generator** (`index-generator.ts`) - Creates AI-powered conversation summaries and searchable index
-   - **Shared Conversation Processor** (`shared-conversation-processor.ts`) - Core conversation processing logic shared between frontend and backend
-   - **Token Extractor** (`token-extractor.js`) - A simpler interceptor that extracts Claude Code OAuth tokens
+   - **Index Generator** (`index-generator.ts`) - AI-powered conversation summaries and searchable index
+   - **Shared Conversation Processor** (`shared-conversation-processor.ts`) - Core conversation processing shared between frontend and backend
+   - **Token Extractor** (`token-extractor.js`) - Extracts Claude Code OAuth tokens (V1 Node.js path)
 
 2. **Frontend** (`frontend/src/`)
-   - **`app.ts`** - Main ClaudeApp component, handles data processing and view switching
-   - **`index.ts`** - Application entry point, injects CSS and initializes app
-   - **`types/claude-data.ts`** - TypeScript interfaces for API data structures
-   - **`utils/data.ts`** - Processes raw HTTP pairs, reconstructs SSE messages
-   - **`utils/markdown.ts`** - Markdown to HTML conversion utilities
-   - **`components/simple-conversation-view.ts`** - Main conversation display with tool visualization
+
+   - **`app.ts`** - Main ClaudeApp component, data processing and view switching
+   - **`index.ts`** - Application entry point
+   - **`components/simple-conversation-view.ts`** - Conversation display with tool visualization
    - **`components/raw-pairs-view.ts`** - Raw HTTP traffic viewer
    - **`components/json-view.ts`** - JSON debug data viewer
    - **`styles.css`** - Tailwind CSS with VS Code theme variables
+
+## License
+
+MIT — originally by [Mario Zechner](https://github.com/mariozechner/claude-trace), maintained as [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace).
