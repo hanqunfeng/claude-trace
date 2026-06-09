@@ -1,5 +1,7 @@
 # claude-trace
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Record all your interactions with Claude Code as you develop your projects. See everything Claude hides: system prompts, tool outputs, and raw API data in an intuitive web interface.
 
 **Fork of [mariozechner/claude-trace](https://github.com/mariozechner/claude-trace) with full [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) support** (native binary via reverse proxy).
@@ -23,6 +25,72 @@ When running against a native binary, claude-trace:
 4. Logs all request/response pairs to `.claude-trace/` in real time
 
 If your `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, a temporary config directory is used so the original settings file is never modified.
+
+## Third-Party Models (CC-Switch & Custom Endpoints)
+
+claude-trace works with **third-party model providers**, not just the official Anthropic API. Any setup that routes Claude Code through a custom `ANTHROPIC_BASE_URL` is supported — including [CC-Switch](https://github.com/farion1231/cc-switch), LiteLLM, corporate gateways, and self-hosted proxies.
+
+### How it works
+
+CC-Switch and similar tools configure Claude Code by writing `ANTHROPIC_BASE_URL` (and API keys) into `~/.claude/settings.json`. When you run `claude-trace`, the reverse proxy:
+
+1. **Reads** your configured upstream from `~/.claude/settings.json` or the `ANTHROPIC_BASE_URL` environment variable
+2. **Starts** a local logging proxy on `127.0.0.1`
+3. **Redirects** Claude Code to the local proxy (via a temporary config — your original `settings.json` is never modified)
+4. **Forwards** logged traffic to the real upstream (CC-Switch local proxy, DeepSeek, OpenRouter, LiteLLM, etc.)
+
+```
+Claude Code  →  claude-trace proxy (logs)  →  CC-Switch / custom endpoint  →  model provider
+```
+
+On startup you will see the resolved upstream, for example:
+
+```
+Upstream API: http://127.0.0.1:15721
+Reverse proxy started at http://127.0.0.1:xxxxx
+```
+
+### Example: CC-Switch
+
+1. Install and configure [CC-Switch](https://github.com/farion1231/cc-switch) with your preferred provider (DeepSeek, OpenRouter, local proxy, etc.)
+2. Switch to the provider in CC-Switch — it writes config to `~/.claude/settings.json`
+3. Run claude-trace as usual:
+
+```bash
+claude-trace
+```
+
+claude-trace automatically picks up the CC-Switch endpoint. No extra flags needed.
+
+Example `~/.claude/settings.json` (managed by CC-Switch):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
+    "ANTHROPIC_API_KEY": "sk-..."
+  }
+}
+```
+
+### Other custom endpoints
+
+You can also set the upstream manually:
+
+```bash
+# Via environment variable
+export ANTHROPIC_BASE_URL="https://your-gateway.example.com"
+claude-trace
+
+# Or edit ~/.claude/settings.json directly
+```
+
+### Notes
+
+- The upstream must speak the **Anthropic Messages API** (`/v1/messages`), or use a gateway (like CC-Switch or LiteLLM) that translates to that format
+- API keys and other `env` entries from your settings are preserved — only `ANTHROPIC_BASE_URL` is overridden locally to point at the logging proxy
+- Use `--include-all-requests` if your gateway uses non-standard paths you want captured
+- HTML logs show the actual upstream URL and model name from each request, so you can verify which provider handled the session
 
 ## Install
 

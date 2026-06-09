@@ -1,6 +1,6 @@
 {
 	"name": "@hanqunfeng/claude-trace",
-	"version": "2.0.1",
+	"version": "2.0.2",
 	"description": "Record all your interactions with Claude Code as you develop your projects",
 	"main": "dist/index.js",
 	"bin": {
@@ -19,13 +19,20 @@
 		"prepublishOnly": "npm run clean && npm run build",
 		"test": "node --require ./dist/interceptor.js echo 'test'",
 		"test:generate": "npx tsx src/cli test/test-traffic.jsonl test/index.html",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"publish:check": "bash scripts/publish.sh --check",
+		"publish:dry-run": "bash scripts/publish.sh --dry-run",
+		"publish:release": "bash scripts/publish.sh",
+		"publish:patch": "bash scripts/publish.sh patch",
+		"publish:minor": "bash scripts/publish.sh minor",
+		"publish:major": "bash scripts/publish.sh major"
 	},
 	"files": [
 		"dist/**/*",
 		"frontend/dist/**/*",
 		"frontend/template.html",
-		"README.md"
+		"README.md",
+		"README.zh-CN.md"
 	],
 	"keywords": [
 		"claude",
