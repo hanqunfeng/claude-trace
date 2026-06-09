@@ -5,7 +5,7 @@ Record all your interactions with Claude Code as you develop your projects. See 
 ## Install
 
 ```bash
-npm install -g @mariozechner/claude-trace
+npm install -g @hanqunfeng/claude-trace
 ```
 
 ## Usage

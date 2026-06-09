@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { spawn, ChildProcess } from "child_process";
+import { spawn, ChildProcess, execSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { HTMLGenerator } from "./html-generator";
+import { ReverseProxyServer } from "./reverse-proxy";
 
 // Colors for output
 export const colors = {
@@ -34,6 +36,7 @@ ${colors.yellow}OPTIONS:${colors.reset}
   --index           Generate conversation summaries and index for .claude-trace/ directory
   --run-with         Pass all following arguments to Claude process
   --include-all-requests Include all requests made through fetch, otherwise only requests to v1/messages with more than 2 messages in the context
+  --include-sensitive-headers Log sensitive headers (auth tokens, cookies) without redaction
   --no-open          Don't open generated HTML file in browser
   --log              Specify custom log file base name (without extension)
   --claude-path      Specify custom path to Claude binary
@@ -100,36 +103,30 @@ ${colors.yellow}MIGRATION:${colors.reset}
   This tool replaces Python-based claude-logger and claude-token.py scripts
   with a pure Node.js implementation. All output formats are compatible.
 
-For more information, visit: https://github.com/mariozechner/claude-trace
+For more information, visit: https://github.com/hanqunfeng/claude-trace
 `);
 }
 
 function resolveToJsFile(filePath: string): string {
 	try {
-		// First, resolve any symlinks
 		const realPath = fs.realpathSync(filePath);
 
-		// Check if it's already a JS file
 		if (realPath.endsWith(".js")) {
 			return realPath;
 		}
 
-		// If it's a Node.js shebang script, check if it's actually a JS file
 		if (fs.existsSync(realPath)) {
 			const content = fs.readFileSync(realPath, "utf-8");
-			// Check for Node.js shebang
 			if (
 				content.startsWith("#!/usr/bin/env node") ||
 				content.match(/^#!.*\/node$/m) ||
 				content.includes("require(") ||
 				content.includes("import ")
 			) {
-				// This is likely a JS file without .js extension
 				return realPath;
 			}
 		}
 
-		// If not a JS file, try common JS file locations
 		const possibleJsPaths = [
 			realPath + ".js",
 			realPath.replace(/\/bin\//, "/lib/") + ".js",
@@ -142,77 +139,146 @@ function resolveToJsFile(filePath: string): string {
 			}
 		}
 
-		// Fall back to original path
 		return realPath;
-	} catch (error) {
-		// If resolution fails, return original path
+	} catch {
 		return filePath;
 	}
 }
 
-function getClaudeAbsolutePath(customPath?: string): string {
-	// If custom path is provided, use it directly
+function findClaudePath(customPath?: string): string {
 	if (customPath) {
 		if (!fs.existsSync(customPath)) {
 			log(`Claude binary not found at specified path: ${customPath}`, "red");
 			process.exit(1);
 		}
-		return resolveToJsFile(customPath);
+		return customPath;
 	}
 
-	try {
-		let claudePath = require("child_process")
-			.execSync("which claude", {
-				encoding: "utf-8",
-			})
-			.trim();
+	const isWindows = process.platform === "win32";
 
-		// Handle shell aliases (e.g., "claude: aliased to /path/to/claude")
+	try {
+		const findCmd = isWindows ? "where.exe claude" : "which claude";
+		let claudePath = execSync(findCmd, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
+
+		const msysMatch = claudePath.match(/^\/([a-zA-Z])\//);
+		if (msysMatch) {
+			claudePath = msysMatch[1].toUpperCase() + ":/" + claudePath.slice(3);
+		}
+
 		const aliasMatch = claudePath.match(/:\s*aliased to\s+(.+)$/);
 		if (aliasMatch && aliasMatch[1]) {
 			claudePath = aliasMatch[1];
 		}
 
-		// Check if the path is a bash wrapper
-		if (fs.existsSync(claudePath)) {
-			const content = fs.readFileSync(claudePath, "utf-8");
-			if (content.startsWith("#!/bin/bash")) {
-				// Parse bash wrapper to find actual executable
-				const execMatch = content.match(/exec\s+"([^"]+)"/);
-				if (execMatch && execMatch[1]) {
-					const actualPath = execMatch[1];
-					// Resolve any symlinks to get the final JS file
-					return resolveToJsFile(actualPath);
-				}
+		return claudePath;
+	} catch {
+		const possiblePaths = isWindows
+			? [
+					path.join(os.homedir(), ".local", "bin", "claude.exe"),
+					path.join(process.env.APPDATA || "", "npm", "claude.cmd"),
+					path.join(process.env.APPDATA || "", "npm", "claude"),
+				]
+			: [
+					path.join(os.homedir(), ".claude", "bin", "claude"),
+					path.join(os.homedir(), ".claude", "local", "claude"),
+					path.join(os.homedir(), ".local", "bin", "claude"),
+					"/opt/homebrew/bin/claude",
+					"/usr/local/bin/claude",
+					"/usr/bin/claude",
+				];
+
+		for (const p of possiblePaths) {
+			if (fs.existsSync(p)) {
+				return p;
 			}
 		}
 
-		return resolveToJsFile(claudePath);
-	} catch (error) {
-		// First try the local bash wrapper
-		const os = require("os");
-		const localClaudeWrapper = path.join(os.homedir(), ".claude", "local", "claude");
-
-		if (fs.existsSync(localClaudeWrapper)) {
-			const content = fs.readFileSync(localClaudeWrapper, "utf-8");
-			if (content.startsWith("#!/bin/bash")) {
-				const execMatch = content.match(/exec\s+"([^"]+)"/);
-				if (execMatch && execMatch[1]) {
-					return resolveToJsFile(execMatch[1]);
-				}
-			}
-		}
-
-		// Then try the node_modules/.bin path
-		const localClaudePath = path.join(os.homedir(), ".claude", "local", "node_modules", ".bin", "claude");
-		if (fs.existsSync(localClaudePath)) {
-			return resolveToJsFile(localClaudePath);
-		}
-
-		log(`Claude CLI not found in PATH`, "red");
-		log(`Also checked for local installation at: ${localClaudeWrapper}`, "red");
+		log(`Claude CLI not found in PATH or common locations`, "red");
 		log(`Please install Claude Code CLI first`, "red");
 		process.exit(1);
+	}
+}
+
+function getClaudeAbsolutePath(customPath?: string): string {
+	const claudePath = findClaudePath(customPath);
+	const isWindows = process.platform === "win32";
+
+	if (!isWindows && fs.existsSync(claudePath)) {
+		const content = fs.readFileSync(claudePath, "utf-8");
+		if (content.startsWith("#!/bin/bash") || content.startsWith("#!/bin/sh")) {
+			const execMatch = content.match(/exec\s+"([^"]+)"/);
+			if (execMatch && execMatch[1]) {
+				return resolveToJsFile(execMatch[1]);
+			}
+		}
+	}
+
+	return resolveToJsFile(claudePath);
+}
+
+function getClaudeBinaryPath(customPath?: string): string {
+	const claudePath = findClaudePath(customPath);
+	const isWindows = process.platform === "win32";
+
+	if (isWindows && fs.existsSync(claudePath)) {
+		const content = fs.readFileSync(claudePath, "utf-8");
+
+		const cmdMatch = content.match(/"?%dp0%\\([^"]+\.exe)"?\s/i);
+		if (cmdMatch && cmdMatch[1]) {
+			const dir = path.dirname(claudePath);
+			const resolved = path.join(dir, cmdMatch[1]);
+			if (fs.existsSync(resolved)) {
+				return resolved;
+			}
+		}
+
+		const shMatch = content.match(/exec\s+"?\$basedir\/([^"]+\.exe)"?\s/);
+		if (shMatch && shMatch[1]) {
+			const dir = path.dirname(claudePath);
+			const resolved = path.join(dir, shMatch[1]);
+			if (fs.existsSync(resolved)) {
+				return resolved;
+			}
+		}
+
+		if (claudePath.endsWith(".exe")) {
+			try {
+				return fs.realpathSync(claudePath);
+			} catch {
+				return claudePath;
+			}
+		}
+
+		const exePath = claudePath + ".exe";
+		if (fs.existsSync(exePath)) {
+			return exePath;
+		}
+
+		const dir = path.dirname(claudePath);
+		const npmExePath = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+		if (fs.existsSync(npmExePath)) {
+			return npmExePath;
+		}
+	}
+
+	if (!isWindows && fs.existsSync(claudePath)) {
+		const content = fs.readFileSync(claudePath, "utf-8");
+		if (content.startsWith("#!/bin/bash") || content.startsWith("#!/bin/sh")) {
+			const execMatch = content.match(/exec\s+"([^"]+)"/);
+			if (execMatch && execMatch[1]) {
+				try {
+					return fs.realpathSync(execMatch[1]);
+				} catch {
+					return execMatch[1];
+				}
+			}
+		}
+	}
+
+	try {
+		return fs.realpathSync(claudePath);
+	} catch {
+		return claudePath;
 	}
 }
 
@@ -227,13 +293,205 @@ function getLoaderPath(): string {
 	return loaderPath;
 }
 
-// Scenario 1: No args -> launch node with interceptor and absolute path to claude
+const NATIVE_BINARY_SIGNATURES = {
+	ELF: Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+	MACHO_32: Buffer.from([0xfe, 0xed, 0xfa, 0xce]),
+	MACHO_64: Buffer.from([0xfe, 0xed, 0xfa, 0xcf]),
+	MACHO_32_REV: Buffer.from([0xce, 0xfa, 0xed, 0xfe]),
+	MACHO_64_REV: Buffer.from([0xcf, 0xfa, 0xed, 0xfe]),
+	MACHO_FAT: Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+	PE: Buffer.from([0x4d, 0x5a]),
+} as const;
+
+function isNativeBinary(filePath: string): boolean {
+	try {
+		const fd = fs.openSync(filePath, "r");
+		const buffer = Buffer.alloc(4);
+		fs.readSync(fd, buffer, 0, 4, 0);
+		fs.closeSync(fd);
+
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.ELF)) return true;
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.MACHO_32)) return true;
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.MACHO_64)) return true;
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.MACHO_32_REV)) return true;
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.MACHO_64_REV)) return true;
+		if (buffer.subarray(0, 4).equals(NATIVE_BINARY_SIGNATURES.MACHO_FAT)) return true;
+		if (buffer.subarray(0, 2).equals(NATIVE_BINARY_SIGNATURES.PE)) return true;
+
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+function getClaudeConfigDir(): string {
+	return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+}
+
+function readUpstreamBaseUrl(): string {
+	const settingsPath = path.join(getClaudeConfigDir(), "settings.json");
+
+	if (fs.existsSync(settingsPath)) {
+		try {
+			const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as {
+				env?: { ANTHROPIC_BASE_URL?: string };
+			};
+			if (settings.env?.ANTHROPIC_BASE_URL) {
+				return settings.env.ANTHROPIC_BASE_URL;
+			}
+		} catch {
+			// Fall through to environment/default
+		}
+	}
+
+	return process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
+}
+
+function prepareClaudeSpawnEnv(proxyUrl: string): { tmpDir: string | null; spawnEnv: NodeJS.ProcessEnv } {
+	const settingsPath = path.join(getClaudeConfigDir(), "settings.json");
+	let tmpDir: string | null = null;
+
+	const spawnEnv: NodeJS.ProcessEnv = {
+		...process.env,
+		ANTHROPIC_BASE_URL: proxyUrl,
+	};
+
+	if (fs.existsSync(settingsPath)) {
+		try {
+			const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as {
+				env?: Record<string, string>;
+			};
+
+			if (settings.env?.ANTHROPIC_BASE_URL) {
+				tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-trace-"));
+				const { ANTHROPIC_BASE_URL: _removed, ...restEnv } = settings.env;
+				settings.env = restEnv;
+				fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(settings, null, 2));
+				spawnEnv.CLAUDE_CONFIG_DIR = tmpDir;
+			}
+		} catch (error) {
+			const err = error as Error;
+			log(`Warning: could not prepare temp Claude config: ${err.message}`, "yellow");
+		}
+	}
+
+	return { tmpDir, spawnEnv };
+}
+
+function cleanupTempClaudeConfig(tmpDir: string | null): void {
+	if (!tmpDir) {
+		return;
+	}
+
+	try {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	} catch {
+		// Best-effort cleanup
+	}
+}
+
+async function runClaudeNativeWithProxy(
+	claudePath: string,
+	claudeArgs: string[] = [],
+	includeAllRequests: boolean = false,
+	openInBrowser: boolean = false,
+	logBaseName?: string,
+	logSensitiveHeaders: boolean = false,
+): Promise<void> {
+	log("Using reverse proxy mode for native binary", "yellow");
+
+	const upstreamBaseUrl = readUpstreamBaseUrl();
+	log(`Upstream API: ${upstreamBaseUrl}`, "blue");
+	console.log("");
+
+	const proxy = new ReverseProxyServer({
+		logBaseName,
+		includeAllRequests,
+		openBrowser: openInBrowser,
+		logSensitiveHeaders,
+		targetBaseUrl: upstreamBaseUrl,
+	});
+
+	let proxyInfo: { port: number; url: string };
+	let tmpConfigDir: string | null = null;
+
+	const shutdown = (): void => {
+		proxy.stop();
+		cleanupTempClaudeConfig(tmpConfigDir);
+	};
+
+	try {
+		proxyInfo = await proxy.start();
+		log(`Reverse proxy started at ${proxyInfo.url}`, "green");
+		console.log("");
+	} catch (error) {
+		const err = error as Error;
+		log(`Failed to start reverse proxy: ${err.message}`, "red");
+		process.exit(1);
+	}
+
+	const { tmpDir, spawnEnv } = prepareClaudeSpawnEnv(proxyInfo.url);
+	tmpConfigDir = tmpDir;
+
+	if (tmpConfigDir) {
+		log("Using temporary Claude config (original settings.json unchanged)", "blue");
+	}
+
+	const child: ChildProcess = spawn(claudePath, claudeArgs, {
+		env: spawnEnv,
+		stdio: "inherit",
+		cwd: process.cwd(),
+	});
+
+	child.on("error", (error: Error) => {
+		shutdown();
+		log(`Error starting Claude: ${error.message}`, "red");
+		process.exit(1);
+	});
+
+	child.on("exit", (code: number | null, signal: string | null) => {
+		shutdown();
+
+		if (signal) {
+			log(`\nClaude terminated by signal: ${signal}`, "yellow");
+		} else if (code !== 0 && code !== null) {
+			log(`\nClaude exited with code: ${code}`, "yellow");
+		} else {
+			log("\nClaude session completed", "green");
+		}
+	});
+
+	const handleSignal = (signal: NodeJS.Signals) => {
+		log(`\nReceived ${signal}, shutting down...`, "yellow");
+		shutdown();
+		if (child.pid) {
+			child.kill(signal);
+		}
+	};
+
+	process.on("SIGINT", () => handleSignal("SIGINT"));
+	process.on("SIGTERM", () => handleSignal("SIGTERM"));
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			child.on("exit", () => resolve());
+			child.on("error", reject);
+		});
+	} catch (error) {
+		const err = error as Error;
+		shutdown();
+		log(`Unexpected error: ${err.message}`, "red");
+		process.exit(1);
+	}
+}
+
 async function runClaudeWithInterception(
 	claudeArgs: string[] = [],
 	includeAllRequests: boolean = false,
 	openInBrowser: boolean = false,
 	customClaudePath?: string,
 	logBaseName?: string,
+	logSensitiveHeaders: boolean = false,
 ): Promise<void> {
 	log("Claude Trace", "blue");
 	log("Starting Claude with traffic logging", "yellow");
@@ -242,15 +500,30 @@ async function runClaudeWithInterception(
 	}
 	console.log("");
 
-	const claudePath = getClaudeAbsolutePath(customClaudePath);
+	const claudePath = getClaudeBinaryPath(customClaudePath);
+	log(`Using Claude binary: ${claudePath}`, "blue");
+
+	if (isNativeBinary(claudePath)) {
+		log("Detected native binary", "yellow");
+		await runClaudeNativeWithProxy(
+			claudePath,
+			claudeArgs,
+			includeAllRequests,
+			openInBrowser,
+			logBaseName,
+			logSensitiveHeaders,
+		);
+		return;
+	}
+
+	const jsPath = resolveToJsFile(claudePath);
 	const loaderPath = getLoaderPath();
 
-	log(`Using Claude binary: ${claudePath}`, "blue");
+	log(`Using JavaScript entry: ${jsPath}`, "blue");
 	log("Starting traffic logger...", "green");
 	console.log("");
 
-	// Launch node with interceptor and absolute path to claude, plus any additional arguments
-	const spawnArgs = ["--require", loaderPath, claudePath, ...claudeArgs];
+	const spawnArgs = ["--require", loaderPath, jsPath, ...claudeArgs];
 	const child: ChildProcess = spawn("node", spawnArgs, {
 		env: {
 			...process.env,
@@ -263,7 +536,6 @@ async function runClaudeWithInterception(
 		cwd: process.cwd(),
 	});
 
-	// Handle child process events
 	child.on("error", (error: Error) => {
 		log(`Error starting Claude: ${error.message}`, "red");
 		process.exit(1);
@@ -279,18 +551,16 @@ async function runClaudeWithInterception(
 		}
 	});
 
-	// Handle our own signals
-	const handleSignal = (signal: string) => {
+	const handleSignal = (signal: NodeJS.Signals) => {
 		log(`\nReceived ${signal}, shutting down...`, "yellow");
 		if (child.pid) {
-			child.kill(signal as NodeJS.Signals);
+			child.kill(signal);
 		}
 	};
 
 	process.on("SIGINT", () => handleSignal("SIGINT"));
 	process.on("SIGTERM", () => handleSignal("SIGTERM"));
 
-	// Wait for child process to complete
 	try {
 		await new Promise<void>((resolve, reject) => {
 			child.on("exit", () => resolve());
@@ -303,50 +573,43 @@ async function runClaudeWithInterception(
 	}
 }
 
-// Scenario 2: --extract-token -> launch node with token interceptor and absolute path to claude
 async function extractToken(customClaudePath?: string): Promise<void> {
 	const claudePath = getClaudeAbsolutePath(customClaudePath);
 
-	// Log to stderr so it doesn't interfere with token output
 	console.error(`Using Claude binary: ${claudePath}`);
 
-	// Create .claude-trace directory if it doesn't exist
 	const claudeTraceDir = path.join(process.cwd(), ".claude-trace");
 	if (!fs.existsSync(claudeTraceDir)) {
 		fs.mkdirSync(claudeTraceDir, { recursive: true });
 	}
 
-	// Token file location
 	const tokenFile = path.join(claudeTraceDir, "token.txt");
-
-	// Use the token extractor directly without copying
 	const tokenExtractorPath = path.join(__dirname, "token-extractor.js");
+
 	if (!fs.existsSync(tokenExtractorPath)) {
 		log(`Token extractor not found at: ${tokenExtractorPath}`, "red");
 		process.exit(1);
 	}
 
-	const cleanup = () => {
+	const cleanup = (): void => {
 		try {
 			if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile);
-		} catch (e) {
+		} catch {
 			// Ignore cleanup errors
 		}
 	};
 
-	// Launch node with token interceptor and absolute path to claude
-	const { ANTHROPIC_API_KEY, ...envWithoutApiKey } = process.env;
+	const { ANTHROPIC_API_KEY: _removed, ...envWithoutApiKey } = process.env;
 	const child: ChildProcess = spawn("node", ["--require", tokenExtractorPath, claudePath, "-p", "hello"], {
 		env: {
 			...envWithoutApiKey,
 			NODE_TLS_REJECT_UNAUTHORIZED: "0",
 			CLAUDE_TRACE_TOKEN_FILE: tokenFile,
 		},
-		stdio: "inherit", // Suppress all output from Claude
+		stdio: "inherit",
 		cwd: process.cwd(),
 	});
 
-	// Set a timeout to avoid hanging
 	const timeout = setTimeout(() => {
 		child.kill();
 		cleanup();
@@ -354,7 +617,6 @@ async function extractToken(customClaudePath?: string): Promise<void> {
 		process.exit(1);
 	}, 30000);
 
-	// Handle child process events
 	child.on("error", (error: Error) => {
 		clearTimeout(timeout);
 		cleanup();
@@ -370,12 +632,11 @@ async function extractToken(customClaudePath?: string): Promise<void> {
 				const token = fs.readFileSync(tokenFile, "utf-8").trim();
 				cleanup();
 				if (token) {
-					// Only output the token, nothing else
 					console.log(token);
 					process.exit(0);
 				}
 			}
-		} catch (e) {
+		} catch {
 			// File doesn't exist or read error
 		}
 
@@ -384,7 +645,6 @@ async function extractToken(customClaudePath?: string): Promise<void> {
 		process.exit(1);
 	});
 
-	// Check for token file periodically
 	const checkToken = setInterval(() => {
 		try {
 			if (fs.existsSync(tokenFile)) {
@@ -394,19 +654,16 @@ async function extractToken(customClaudePath?: string): Promise<void> {
 					clearInterval(checkToken);
 					child.kill();
 					cleanup();
-
-					// Only output the token, nothing else
 					console.log(token);
 					process.exit(0);
 				}
 			}
-		} catch (e) {
+		} catch {
 			// Ignore read errors, keep trying
 		}
 	}, 500);
 }
 
-// Scenario 3: --generate-html input.jsonl output.html
 async function generateHTMLFromCLI(
 	inputFile: string,
 	outputFile?: string,
@@ -418,7 +675,11 @@ async function generateHTMLFromCLI(
 		const finalOutputFile = await htmlGenerator.generateHTMLFromJSONL(inputFile, outputFile, includeAllRequests);
 
 		if (openInBrowser) {
-			spawn("open", [finalOutputFile], { detached: true, stdio: "ignore" }).unref();
+			if (process.platform === "win32") {
+				spawn("cmd", ["/c", "start", "", finalOutputFile], { detached: true, stdio: "ignore" }).unref();
+			} else {
+				spawn("open", [finalOutputFile], { detached: true, stdio: "ignore" }).unref();
+			}
 			log(`Opening ${finalOutputFile} in browser`, "green");
 		}
 
@@ -430,7 +691,6 @@ async function generateHTMLFromCLI(
 	}
 }
 
-// Scenario 4: --index
 async function generateIndex(): Promise<void> {
 	try {
 		const { IndexGenerator } = await import("./index-generator");
@@ -444,11 +704,9 @@ async function generateIndex(): Promise<void> {
 	}
 }
 
-// Main entry point
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 
-	// Split arguments at --run-with flag
 	const argIndex = args.indexOf("--run-with");
 	let claudeTraceArgs: string[];
 	let claudeArgs: string[];
@@ -461,44 +719,36 @@ async function main(): Promise<void> {
 		claudeArgs = [];
 	}
 
-	// Check for help flags
 	if (claudeTraceArgs.includes("--help") || claudeTraceArgs.includes("-h")) {
 		showHelp();
 		process.exit(0);
 	}
 
-	// Check for include all requests flag
 	const includeAllRequests = claudeTraceArgs.includes("--include-all-requests");
-
-	// Check for no-open flag (inverted logic - open by default)
 	const openInBrowser = !claudeTraceArgs.includes("--no-open");
+	const logSensitiveHeaders = claudeTraceArgs.includes("--include-sensitive-headers");
 
-	// Check for custom Claude path
 	let customClaudePath: string | undefined;
 	const claudePathIndex = claudeTraceArgs.indexOf("--claude-path");
 	if (claudePathIndex !== -1 && claudeTraceArgs[claudePathIndex + 1]) {
 		customClaudePath = claudeTraceArgs[claudePathIndex + 1];
 	}
 
-	// Check for custom log base name
 	let logBaseName: string | undefined;
 	const logIndex = claudeTraceArgs.indexOf("--log");
 	if (logIndex !== -1 && claudeTraceArgs[logIndex + 1]) {
 		logBaseName = claudeTraceArgs[logIndex + 1];
 	}
 
-	// Scenario 2: --extract-token
 	if (claudeTraceArgs.includes("--extract-token")) {
 		await extractToken(customClaudePath);
 		return;
 	}
 
-	// Scenario 3: --generate-html input.jsonl [output.html]
 	if (claudeTraceArgs.includes("--generate-html")) {
 		const flagIndex = claudeTraceArgs.indexOf("--generate-html");
 		const inputFile = claudeTraceArgs[flagIndex + 1];
 
-		// Find the next argument that's not a flag as the output file
 		let outputFile: string | undefined;
 		for (let i = flagIndex + 2; i < claudeTraceArgs.length; i++) {
 			const arg = claudeTraceArgs[i];
@@ -518,14 +768,19 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	// Scenario 4: --index
 	if (claudeTraceArgs.includes("--index")) {
 		await generateIndex();
 		return;
 	}
 
-	// Scenario 1: No args (or claude with args) -> launch claude with interception
-	await runClaudeWithInterception(claudeArgs, includeAllRequests, openInBrowser, customClaudePath, logBaseName);
+	await runClaudeWithInterception(
+		claudeArgs,
+		includeAllRequests,
+		openInBrowser,
+		customClaudePath,
+		logBaseName,
+		logSensitiveHeaders,
+	);
 }
 
 main().catch((error) => {
