@@ -37,7 +37,7 @@ npm install -g @hanqunfeng/claude-trace
 ```bash
 git clone https://github.com/hanqunfeng/claude-trace.git
 cd claude-trace
-npm install    # also installs frontend deps via postinstall
+npm run setup  # installs root + frontend dependencies
 npm run build
 npm link       # optional: make `claude-trace` available globally
 ```
@@ -145,7 +145,7 @@ This feature:
 ### Running in dev mode
 
 ```bash
-npm install      # installs root + frontend dependencies
+npm run setup    # first time: installs root + frontend dependencies
 npm run dev      # predev compiles + copies JS loaders, then starts watchers
 ```
 

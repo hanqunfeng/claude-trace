@@ -1,6 +1,6 @@
 {
 	"name": "@hanqunfeng/claude-trace",
-	"version": "1.0.8",
+	"version": "2.0.1",
 	"description": "Record all your interactions with Claude Code as you develop your projects",
 	"main": "dist/index.js",
 	"bin": {
@@ -9,7 +9,7 @@
 	"scripts": {
 		"build": "tsc && cp src/interceptor-loader.js src/token-extractor.js dist/ && npm run build:frontend",
 		"build:frontend": "cd frontend && npm run build",
-		"postinstall": "cd frontend && npm install",
+		"setup": "npm install && cd frontend && npm install",
 		"predev": "tsc && mkdir -p dist && cp src/interceptor-loader.js src/token-extractor.js dist/",
 		"dev": "concurrently \"npm run dev:core\" \"npm run dev:copy\" \"npm run dev:frontend\"",
 		"dev:core": "tsc --watch --preserveWatchOutput",

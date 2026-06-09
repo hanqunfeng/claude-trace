@@ -42,7 +42,7 @@ test/
 ## Build & Dev Commands
 
 ```bash
-npm install          # postinstall also runs frontend npm install
+npm run setup        # installs root + frontend dependencies (first time)
 npm run build        # tsc + copy .js loaders + frontend build
 npm run dev          # predev compiles once, then watch mode
 npm run typecheck    # tsc --noEmit
@@ -57,7 +57,7 @@ node dist/cli.js     # run CLI from source build
 - **No self-referential npm dependency** — package does not depend on itself
 - **Package name:** `@hanqunfeng/claude-trace`, bin command: `claude-trace`
 - **Logs directory:** `.claude-trace/` in cwd (gitignored)
-- **Frontend is a separate package** — has its own `package.json`; root `postinstall` installs it
+- **Frontend is a separate package** — has its own `package.json`; run `npm run setup` to install both
 
 ## CLI Flags (current)
 
