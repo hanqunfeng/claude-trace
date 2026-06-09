@@ -4,7 +4,7 @@
 
 Record all your interactions with Claude Code as you develop your projects. See everything Claude hides: system prompts, tool outputs, and raw API data in an intuitive web interface.
 
-**Fork of [mariozechner/claude-trace](https://github.com/mariozechner/claude-trace) with full [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) support** (native binary via reverse proxy).
+**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) with full [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) support** (native binary via reverse proxy).
 
 ## Claude Code V2+ Support
 
@@ -270,4 +270,4 @@ npm run build
 
 ## License
 
-MIT — originally by [Mario Zechner](https://github.com/mariozechner/claude-trace), maintained as [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace).
+MIT — originally by [Mario Zechner](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace), maintained as [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace).

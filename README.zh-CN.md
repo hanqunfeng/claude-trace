@@ -4,7 +4,7 @@
 
 记录你与 Claude Code 的所有交互。以直观的 Web 界面查看 Claude 隐藏的内容：系统提示词、工具输出和原始 API 数据。
 
-**[mariozechner/claude-trace](https://github.com/mariozechner/claude-trace) 的分支版本，完整支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code)**（通过反向代理支持原生二进制）。
+**[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本，完整支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code)**（通过反向代理支持原生二进制）。
 
 ## Claude Code V2+ 支持
 
@@ -265,4 +265,4 @@ npm run build
 
 ## 许可证
 
-MIT — 原作者 [Mario Zechner](https://github.com/mariozechner/claude-trace)，由 [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace) 维护。
+MIT — 原作者 [Mario Zechner](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)，由 [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace) 维护。
