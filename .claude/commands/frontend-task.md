@@ -1,81 +1,111 @@
 # Frontend Development Workflow
 
-## Development Environment Setup
+Invoke this command in Claude Code: `/frontend-task`
 
-The project has a live development environment with immediate feedback loop:
+Guides frontend work on the HTML log viewer in `frontend/src/`. Does not affect the CLI or reverse proxy in `src/`.
 
-1. **Run development server**: `npm run dev`
+## First-Time Setup
 
-   - Continuously rebuilds both backend (`src/`) and frontend (`frontend/src/`) on file changes
-   - Serves project at `http://localhost:8080`
-   - Auto-generates `test/index.html` from `test/test-traffic.jsonl` via HTML generation
+From the repository root:
 
-2. **Live preview**: Browser-sync serves `test/index.html` to Chrome
+```bash
+npm run setup    # installs root + frontend dependencies
+npm run build    # ensures dist/ exists for build:html in dev rebuild
+```
 
-   - Automatic browser refresh on frontend changes
-   - Immediate visual feedback when editing frontend code
+## Development Environment
 
-3. **Screenshot feedback**: Use snap-happy tools for visual verification
+1. **Start dev server** (from repo root):
 
    ```bash
-   # List windows to get Chrome window ID
-   mcp__snap-happy__ListWindows
-
-   # Take screenshot of specific window (Chrome)
-   mcp__snap-happy__TakeScreenshot windowId: <chrome_id>
+   npm run dev
    ```
 
-IMPORTANT: the window id can change! Always list windows before taking a screenshot for a specific app.
+   - `predev` compiles backend and copies `interceptor-loader.js` / `token-extractor.js` to `dist/`
+   - Watches `src/` (TypeScript) and `frontend/src/` (Lit + Tailwind)
+   - Rebuilds frontend CSS/JS and regenerates `test/index.html` from `test/test-traffic.jsonl`
+
+2. **Live preview**:
+
+   - Open **http://localhost:8080/test** in a browser
+   - browser-sync auto-refreshes on HTML/CSS/JS changes
+   - Sample data: `test/test-traffic.jsonl` → `test/index.html`
+
+3. **Visual verification**:
+
+   - Rely on browser-sync live reload after edits
+   - Manually check conversation, raw, and JSON views in the preview
+   - Run `npm run typecheck` in repo root (or `cd frontend && npm run typecheck`) before committing
+
+## Key Frontend Files
+
+| Path | Purpose |
+|------|---------|
+| `frontend/src/app.ts` | Main app, view switching |
+| `frontend/src/components/simple-conversation-view.ts` | Conversation + tool UI |
+| `frontend/src/components/raw-pairs-view.ts` | Raw HTTP viewer |
+| `frontend/src/components/json-view.ts` | JSON debug viewer |
+| `frontend/src/utils/markdown.ts` | `markdownToHtml()` with escaping |
+| `frontend/src/styles.css` | Tailwind + VS Code theme |
+| `frontend/tailwind.config.js` | `vs-*` color tokens |
+
+Built output (`frontend/dist/`) is embedded into self-contained HTML reports by `src/html-generator.ts`.
 
 ## Frontend Styling Guidelines
 
 ### Terminal Aesthetics
 
-- **Font size**: Always 12px across ALL elements (no typography variations)
-- **Hierarchy**: Use color variations from VS Code theme, not font sizes
-- **Background colors**: Used sparingly for sections/highlighting only
+- **Font size**: 12px globally (`html, body { font-size: 12px }` in `styles.css`)
+- **Hierarchy**: Use VS Code theme colors, not larger font sizes
+- **Headings in markdown**: `font-size: inherit` — same size as body, bold only
+- **Background colors**: Sparingly, for sections/highlighting
 
 ### Spacing Rules
 
-- **Vertical spacing**: Always em-based multiples (1em, 2em, etc.)
-- **Horizontal spacing**: Always character-based multiples (monospace)
-- **Use Tailwind classes**: Never inline styles (`style="..."`)
-- **Examples**:
+- **Vertical spacing**: em-based multiples (`1em`, `2em`, Tailwind `mb-4`, `mt-4`, etc.)
+- **Horizontal spacing**: character/monospace multiples where appropriate
+- **Use Tailwind classes**: Avoid inline `style="..."`
 
-   ```html
-   <!-- Good: Terminal spacing with Tailwind -->
-   <div class="mb-8 p-4">
-   	<span class="mr-12 ml-8">
-   		<!-- Bad: Arbitrary px values or inline styles -->
-   		<div style="margin-bottom: 32px; padding: 16px">
-   			<span style="margin-right: 3em;"></span></div
-   	></span>
-   </div>
-   ```
+```html
+<!-- Good -->
+<div class="mb-4 p-4 bg-vs-bg-secondary text-vs-text">
+  <span class="mr-8 text-vs-muted">timestamp</span>
+</div>
 
-### Color Usage (VS Code Theme)
+<!-- Bad -->
+<div style="margin-bottom: 32px; padding: 16px">
+```
 
-- `text-vs-function`: Headers, tool names
-- `text-vs-assistant`: Assistant messages
-- `text-vs-user`: User messages
-- `text-vs-muted`: Secondary info, timestamps
-- `text-vs-accent`: Links, hover states
-- `bg-vs-bg-secondary`: Content backgrounds
-- `border-vs-highlight`: Conversation borders
+### Color Tokens (Tailwind `vs-*`)
+
+Defined in `frontend/tailwind.config.js`:
+
+- `text-vs-function` — headers, tool names
+- `text-vs-assistant` — assistant messages
+- `text-vs-user` — user messages
+- `text-vs-muted` — secondary info, timestamps
+- `text-vs-accent` — links, hover states
+- `text-vs-type` — types, tool labels
+- `bg-vs-bg-secondary` — content panels
+- `border-vs-highlight` — conversation borders
 
 ## HTML Safety
 
-- All text content automatically escaped via `markdownToHtml()` function
-- System-reminder tags have special collapsible handling
-- No raw HTML injection concerns
+- User-facing text goes through `markdownToHtml()` in `frontend/src/utils/markdown.ts`
+- HTML entities escaped before markdown rendering
+- Do not inject unescaped raw HTML from API data
 
 ## Development Flow
 
-1. Edit frontend files in `frontend/src/`
-2. Changes trigger automatic rebuild
-3. `test/index.html` updates automatically
-4. Browser refreshes to show changes
-5. Take screenshot to verify improvements
-6. Iterate quickly with immediate visual feedback
+1. Run `npm run dev` from repo root
+2. Open http://localhost:8080/test
+3. Edit files under `frontend/src/`
+4. Wait for rebuild; browser refreshes automatically
+5. Verify all three views (conversations / raw / json) if the change is broad
+6. Run typecheck before finishing
 
-This setup enables rapid frontend development with terminal-style consistency and immediate visual verification.
+## Constraints
+
+- Avoid `any` — use types from `src/types.ts` and `@anthropic-ai/sdk/resources/messages`
+- Frontend uses **Lit** (no React/Vue); components use light DOM (`createRenderRoot() { return this }`) for global Tailwind
+- Do not add `postinstall` or assume `snap-happy` — not part of this repository
