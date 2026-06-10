@@ -1,6 +1,6 @@
 {
 	"name": "@hanqunfeng/claude-trace",
-	"version": "3.0.2",
+	"version": "3.0.3",
 	"description": "Record all your interactions with Claude Code as you develop your projects",
 	"main": "dist/index.js",
 	"bin": {
