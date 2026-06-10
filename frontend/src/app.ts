@@ -100,6 +100,13 @@ export class ClaudeApp extends LitElement {
 		return counts;
 	}
 
+	private getBrandName(): string {
+		const tool = this.data.metadata?.tool as string | undefined;
+		if (tool === "claude") return "claude-trace";
+		if (tool === "opencode") return "opencode-trace";
+		return "trace";
+	}
+
 	render() {
 		const modelCounts = this.modelCounts;
 		const filteredConversations = this.filteredConversations;
@@ -109,7 +116,7 @@ export class ClaudeApp extends LitElement {
 				<div class="max-w-[60em] mx-auto p-4">
 					<div class="mb-8">
 						<div class="mb-4 text-center">
-							<span class="text-vs-function">~ claude-traffic</span>
+							<span class="text-vs-function">~ ${this.getBrandName()}</span>
 							<span class="text-vs-muted ml-8">${this.data.timestamp || new Date().toISOString()}</span>
 						</div>
 

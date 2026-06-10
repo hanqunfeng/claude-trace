@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import { HTMLGenerator } from "./html-generator";
 import { SharedConversationProcessor } from "./shared-conversation-processor";
 import type { RawPair, SSEEvent } from "./types";
+import type { ModelRoute } from "./tools/types";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 
 export interface ReverseProxyConfig {
@@ -18,6 +19,9 @@ export interface ReverseProxyConfig {
 	openBrowser?: boolean;
 	logSensitiveHeaders?: boolean;
 	targetBaseUrl?: string;
+	routes?: Record<string, string>;
+	modelRoutes?: Record<string, ModelRoute>;
+	tool?: string;
 }
 
 export interface ProxyInfo {
@@ -45,9 +49,131 @@ function parseTargetBaseUrl(targetBaseUrl?: string): ParsedTarget {
 	};
 }
 
+const LLM_API_PATHS = [
+	"/v1/messages",
+	"/messages",
+	"/v1/chat/completions",
+	"/chat/completions",
+	"/v1/responses",
+];
+
+function isLlmApiPath(urlPath: string | undefined): boolean {
+	if (!urlPath) {
+		return false;
+	}
+	return LLM_API_PATHS.some((segment) => urlPath.includes(segment));
+}
+
+function resolveRouteTarget(
+	reqUrl: string | undefined,
+	routes: Record<string, string> | undefined,
+	fallback: ParsedTarget,
+): ParsedTarget & { upstreamDisplayPath: string } {
+	if (!reqUrl || !routes || Object.keys(routes).length === 0) {
+		const upstreamDisplayPath = `${fallback.pathPrefix}${reqUrl || "/"}`;
+		return { ...fallback, upstreamDisplayPath };
+	}
+
+	const match = reqUrl.match(/^\/p\/([^/]+)(\/.*)?$/);
+	if (!match) {
+		const upstreamDisplayPath = `${fallback.pathPrefix}${reqUrl}`;
+		return { ...fallback, upstreamDisplayPath };
+	}
+
+	const providerId = decodeURIComponent(match[1]);
+	const remainder = match[2] || "/";
+	const upstreamBaseUrl = routes[providerId];
+
+	if (!upstreamBaseUrl) {
+		const upstreamDisplayPath = `${fallback.pathPrefix}${reqUrl}`;
+		return { ...fallback, upstreamDisplayPath };
+	}
+
+	const target = parseTargetBaseUrl(upstreamBaseUrl);
+	const upstreamDisplayPath = `${target.pathPrefix}${remainder}`;
+	return {
+		...target,
+		upstreamDisplayPath,
+	};
+}
+
+function extractModelFromBody(requestBody: string): string | null {
+	if (!requestBody) {
+		return null;
+	}
+
+	try {
+		const parsed = JSON.parse(requestBody) as { model?: unknown };
+		return typeof parsed.model === "string" ? parsed.model : null;
+	} catch {
+		return null;
+	}
+}
+
+function resolveModelRoute(model: string, modelRoutes: Record<string, ModelRoute>): ModelRoute | null {
+	if (modelRoutes[model]) {
+		return modelRoutes[model];
+	}
+
+	const slashIndex = model.indexOf("/");
+	if (slashIndex > 0) {
+		const modelId = model.slice(slashIndex + 1);
+		if (modelRoutes[modelId]) {
+			return modelRoutes[modelId];
+		}
+	}
+
+	return null;
+}
+
+function normalizeUpstreamPath(urlPath: string, modelRoute?: ModelRoute): string {
+	if (modelRoute?.apiFormat === "anthropic" && (urlPath === "/messages" || urlPath.startsWith("/messages?"))) {
+		return urlPath.replace(/^\/messages/, "/v1/messages");
+	}
+	return urlPath;
+}
+
+function resolveModelTarget(
+	reqUrl: string | undefined,
+	requestBody: string,
+	modelRoutes: Record<string, ModelRoute>,
+	fallback: ParsedTarget,
+): (ParsedTarget & { upstreamDisplayPath: string; modelRoute?: ModelRoute }) | null {
+	const model = extractModelFromBody(requestBody);
+	if (!model) {
+		return null;
+	}
+
+	const modelRoute = resolveModelRoute(model, modelRoutes);
+	if (!modelRoute) {
+		if (process.env.OPENCODE_TRACE_DEBUG) {
+			console.error(`opencode-trace: unknown model "${model}", cannot route request`);
+		}
+		return null;
+	}
+
+	const target = parseTargetBaseUrl(modelRoute.upstreamBaseUrl);
+	const [rawPath, query = ""] = (reqUrl || "/").split("?");
+	const urlPath = normalizeUpstreamPath(rawPath, modelRoute);
+	const upstreamDisplayPath = `${target.pathPrefix}${urlPath}${query ? `?${query}` : ""}`;
+
+	if (process.env.OPENCODE_TRACE_DEBUG) {
+		console.error(
+			`opencode-trace: ${reqUrl || "/"} | model=${model} → provider=${modelRoute.providerId} (${modelRoute.apiFormat}) → ${modelRoute.upstreamBaseUrl}`,
+		);
+	}
+
+	return {
+		...target,
+		upstreamDisplayPath,
+		modelRoute,
+	};
+}
+
 export class ReverseProxyServer {
 	private server: http.Server | null = null;
 	private pairs: RawPair[] = [];
+	private stopped = false;
 	private readonly targetProtocol: string;
 	private readonly targetHost: string;
 	private readonly targetPort: number;
@@ -68,6 +194,9 @@ export class ReverseProxyServer {
 	private readonly jsonFile: string;
 	private readonly htmlFile: string;
 	private readonly htmlGenerator: HTMLGenerator;
+	private readonly tool?: string;
+	private readonly routes?: Record<string, string>;
+	private readonly modelRoutes?: Record<string, ModelRoute>;
 
 	constructor(config: ReverseProxyConfig = {}) {
 		const target = parseTargetBaseUrl(config.targetBaseUrl);
@@ -76,6 +205,9 @@ export class ReverseProxyServer {
 		this.targetPort = target.targetPort;
 		this.pathPrefix = target.pathPrefix;
 		this.useHttps = target.protocol === "https:";
+		this.tool = config.tool;
+		this.routes = config.routes;
+		this.modelRoutes = config.modelRoutes;
 
 		this.config = {
 			port: config.port || 0,
@@ -177,9 +309,9 @@ export class ReverseProxyServer {
 	private async generateHTML(): Promise<void> {
 		try {
 			await this.htmlGenerator.generateHTML(this.pairs, this.htmlFile, {
-				title: `${this.pairs.length} API Calls`,
 				timestamp: new Date().toISOString().replace("T", " ").slice(0, -5),
 				includeAllRequests: this.config.includeAllRequests,
+				tool: this.tool,
 			});
 		} catch (err) {
 			console.error(`Failed to generate HTML: ${err}`);
@@ -203,10 +335,10 @@ export class ReverseProxyServer {
 				if (address && typeof address === "object") {
 					const port = address.port;
 					const url = `http://127.0.0.1:${port}`;
-					console.log(`Logs will be written to:`);
-					console.log(`  JSONL: ${path.resolve(this.logFile)}`);
-					console.log(`  JSON:  ${path.resolve(this.jsonFile)}`);
-					console.log(`  HTML:  ${path.resolve(this.htmlFile)}`);
+					console.error(`Logs will be written to:`);
+					console.error(`  JSONL: ${path.resolve(this.logFile)}`);
+					console.error(`  JSON:  ${path.resolve(this.jsonFile)}`);
+					console.error(`  HTML:  ${path.resolve(this.htmlFile)}`);
 					resolve({ port, url });
 				} else {
 					reject(new Error("Failed to get server address"));
@@ -224,21 +356,44 @@ export class ReverseProxyServer {
 		});
 
 		req.on("end", () => {
-			const upstreamPath = `${this.pathPrefix}${req.url || "/"}`;
-			const upstreamUrl = `${this.targetProtocol}//${this.targetHost}${upstreamPath}`;
+			const fallback = {
+				protocol: this.targetProtocol,
+				targetHost: this.targetHost,
+				targetPort: this.targetPort,
+				pathPrefix: this.pathPrefix,
+			};
+
+			const modelTarget =
+				this.modelRoutes && Object.keys(this.modelRoutes).length > 0
+					? resolveModelTarget(req.url, requestBody, this.modelRoutes, fallback)
+					: null;
+
+			if (this.modelRoutes && Object.keys(this.modelRoutes).length > 0 && !modelTarget) {
+				res.writeHead(502);
+				res.end("opencode-trace: could not resolve model from request body");
+				return;
+			}
+
+			const routeTarget =
+				modelTarget ??
+				resolveRouteTarget(req.url, this.routes, fallback);
+
+			const upstreamPath = routeTarget.upstreamDisplayPath;
+			const upstreamUrl = `${routeTarget.protocol}//${routeTarget.targetHost}${upstreamPath}`;
+			const useHttps = routeTarget.protocol === "https:";
 
 			const options: https.RequestOptions = {
-				hostname: this.targetHost,
-				port: this.targetPort,
+				hostname: routeTarget.targetHost,
+				port: routeTarget.targetPort,
 				path: upstreamPath,
 				method: req.method,
 				headers: {
 					...req.headers,
-					host: this.targetHost,
+					host: routeTarget.targetHost,
 				},
 			};
 
-			const requestModule = this.useHttps ? https : http;
+			const requestModule = useHttps ? https : http;
 			const proxyReq = requestModule.request(options, (proxyRes) => {
 				const responseTimestamp = Date.now();
 				const responseChunks: Buffer[] = [];
@@ -259,6 +414,7 @@ export class ReverseProxyServer {
 						requestBody,
 						responseChunks,
 						upstreamUrl,
+						modelTarget !== null,
 					);
 					res.end();
 				});
@@ -285,14 +441,19 @@ export class ReverseProxyServer {
 		requestBody: string,
 		responseChunks: Buffer[],
 		upstreamUrl: string,
+		modelRouted: boolean = false,
 	): Promise<void> {
 		const shouldLog =
-			this.config.includeAllRequests || (req.url !== undefined && req.url.includes("/v1/messages"));
+			this.config.includeAllRequests || isLlmApiPath(req.url) || modelRouted;
 
 		if (!shouldLog) {
+			if (process.env.OPENCODE_TRACE_DEBUG) {
+				console.error(`opencode-trace: skipped logging for ${req.method} ${req.url}`);
+			}
 			return;
 		}
 
+		try {
 		let parsedRequestBody: unknown = null;
 		try {
 			parsedRequestBody = requestBody ? JSON.parse(requestBody) : null;
@@ -339,6 +500,9 @@ export class ReverseProxyServer {
 		this.pairs.push(pair);
 		this.writePairToLog(pair);
 		await this.generateHTML();
+		} catch (err) {
+			console.error(`opencode-trace: failed to log response: ${err}`);
+		}
 	}
 
 	private parseResponseBody(
@@ -370,27 +534,38 @@ export class ReverseProxyServer {
 	}
 
 	stop(): void {
-		if (!this.server) {
+		if (this.stopped) {
 			return;
 		}
+		this.stopped = true;
 
-		console.log(`Logged ${this.pairs.length} request/response pairs`);
-
-		if (this.config.openBrowser && fs.existsSync(this.htmlFile)) {
-			try {
-				if (process.platform === "win32") {
-					spawn("cmd", ["/c", "start", "", this.htmlFile], { detached: true, stdio: "ignore" }).unref();
-				} else {
-					const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-					spawn(cmd, [this.htmlFile], { detached: true, stdio: "ignore" }).unref();
-				}
-				console.log(`Opening ${this.htmlFile} in browser`);
-			} catch (err) {
-				console.error(`Failed to open browser: ${err}`);
-			}
+		if (this.server) {
+			this.server.close();
+			this.server = null;
 		}
 
-		this.server.close();
-		this.server = null;
+		console.error(`Logged ${this.pairs.length} request/response pairs`);
+
+		if (this.config.openBrowser && fs.existsSync(this.htmlFile)) {
+			this.openHtmlInBrowser(this.htmlFile);
+		}
+	}
+
+	getHtmlFile(): string {
+		return this.htmlFile;
+	}
+
+	private openHtmlInBrowser(htmlFile: string): void {
+		try {
+			if (process.platform === "win32") {
+				spawn("cmd", ["/c", "start", "", htmlFile], { detached: true, stdio: "ignore" }).unref();
+			} else {
+				const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+				spawn(cmd, [htmlFile], { detached: true, stdio: "ignore" }).unref();
+			}
+			console.error(`Opening ${htmlFile} in browser`);
+		} catch (err) {
+			console.error(`Failed to open browser: ${err}`);
+		}
 	}
 }

@@ -28,11 +28,12 @@ export interface LogSummary {
 }
 
 export class IndexGenerator {
-	private traceDir: string = ".claude-trace";
+	private traceDir: string;
 	private htmlGenerator: HTMLGenerator;
 	private conversationProcessor: SharedConversationProcessor;
 
-	constructor() {
+	constructor(traceDir: string = ".claude-trace") {
+		this.traceDir = traceDir;
 		this.htmlGenerator = new HTMLGenerator();
 		this.conversationProcessor = new SharedConversationProcessor();
 	}

@@ -4,7 +4,8 @@
 	"description": "Record all your interactions with Claude Code as you develop your projects",
 	"main": "dist/index.js",
 	"bin": {
-		"claude-trace": "dist/cli.js"
+		"claude-trace": "dist/cli.js",
+		"opencode-trace": "dist/opencode-cli.js"
 	},
 	"scripts": {
 		"build": "tsc && cp src/interceptor-loader.js src/token-extractor.js dist/ && npm run build:frontend",
@@ -36,6 +37,7 @@
 	],
 	"keywords": [
 		"claude",
+		"opencode",
 		"anthropic",
 		"logging",
 		"api",

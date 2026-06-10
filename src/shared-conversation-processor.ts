@@ -785,6 +785,7 @@ export class SharedConversationProcessor {
                     text = text.replace(/Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/g, "Generated [TIMESTAMP]");
                     text = text.replace(/The user opened the file [^\s]+ in the IDE\./g, "The user opened file in IDE.");
                     text = text.replace(/<system-reminder>.*?<\/system-reminder>/gs, "[SYSTEM-REMINDER]");
+                    text = text.replace(/<EXTREMELY_IMPORTANT>.*?<\/EXTREMELY_IMPORTANT>/gs, "[EXTREMELY-IMPORTANT]");
                     return { type: "text", text: text };
                 }
                 return block;

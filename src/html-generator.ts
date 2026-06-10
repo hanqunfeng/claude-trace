@@ -52,6 +52,7 @@ export class HTMLGenerator {
 			timestamp: data.timestamp,
 			metadata: {
 				includeAllRequests: data.includeAllRequests || false,
+				...(data.tool ? { tool: data.tool } : {}),
 			},
 		};
 
@@ -71,6 +72,16 @@ export class HTMLGenerator {
 			.replace(/'/g, "&#39;");
 	}
 
+	private buildReportBrand(tool?: string): string {
+		if (tool === "claude") return "claude-trace";
+		if (tool === "opencode") return "opencode-trace";
+		return "trace";
+	}
+
+	private buildReportTitle(pairCount: number, tool?: string): string {
+		return `${this.buildReportBrand(tool)} · ${pairCount} API Calls`;
+	}
+
 	public async generateHTML(
 		pairs: RawPair[],
 		outputFile: string,
@@ -78,6 +89,7 @@ export class HTMLGenerator {
 			title?: string;
 			timestamp?: string;
 			includeAllRequests?: boolean;
+			tool?: string;
 		} = {},
 	): Promise<void> {
 		try {
@@ -95,6 +107,7 @@ export class HTMLGenerator {
 				rawPairs: filteredPairs,
 				timestamp: options.timestamp || new Date().toISOString().replace("T", " ").slice(0, -5),
 				includeAllRequests: options.includeAllRequests || false,
+				tool: options.tool,
 			};
 
 			const dataJsonEscaped = this.prepareDataForInjection(htmlData);
@@ -114,7 +127,9 @@ export class HTMLGenerator {
 				.replace("__CLAUDE_LOGGER_DATA_REPLACEMENT_UNIQUE_9487__", dataJsonEscaped)
 				.replace(
 					"__CLAUDE_LOGGER_TITLE_REPLACEMENT_UNIQUE_9487__",
-					this.escapeHtml(options.title || `${filteredPairs.length} API Calls`),
+					this.escapeHtml(
+						options.title || this.buildReportTitle(filteredPairs.length, options.tool),
+					),
 				);
 
 			// Ensure output directory exists
@@ -135,6 +150,7 @@ export class HTMLGenerator {
 		jsonlFile: string,
 		outputFile?: string,
 		includeAllRequests: boolean = true,
+		tool?: string,
 	): Promise<string> {
 		if (!fs.existsSync(jsonlFile)) {
 			throw new Error(`File '${jsonlFile}' not found.`);
@@ -167,7 +183,7 @@ export class HTMLGenerator {
 			outputFile = jsonlFile.replace(/\.jsonl$/, ".html");
 		}
 
-		await this.generateHTML(pairs, outputFile, { includeAllRequests });
+		await this.generateHTML(pairs, outputFile, { includeAllRequests, tool });
 		return outputFile;
 	}
 

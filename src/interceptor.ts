@@ -417,9 +417,9 @@ export class ClaudeTrafficLogger {
 		try {
 			const includeAllRequests = process.env.CLAUDE_TRACE_INCLUDE_ALL_REQUESTS === "true";
 			await this.htmlGenerator.generateHTML(this.pairs, this.htmlFile, {
-				title: `${this.pairs.length} API Calls`,
 				timestamp: new Date().toISOString().replace("T", " ").slice(0, -5),
 				includeAllRequests,
+				tool: "claude",
 			});
 			// Silent HTML generation
 		} catch (error) {

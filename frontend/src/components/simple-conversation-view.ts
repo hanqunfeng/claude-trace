@@ -79,6 +79,22 @@ export class SimpleConversationView extends LitElement {
 		this.handleToggle(e, { type: "write" });
 	}
 
+	private renderThinkingBlock(thinking: string): TemplateResult {
+		const content = thinking.trim();
+		if (!content) {
+			return html``;
+		}
+
+		return this.renderCollapsibleSection(
+			"Thinking",
+			html`<div class="text-gray-400 markdown-content">${unsafeHTML(markdownToHtml(content))}</div>`,
+			{
+				titleClasses: "text-gray-500 italic",
+				containerClasses: "mt-4 mb-4",
+			},
+		);
+	}
+
 	private formatContent(content: string | ContentBlockParam[], toolResults?: Record<string, any>): TemplateResult {
 		if (typeof content === "string") {
 			return this.formatStringContent(content);
@@ -91,16 +107,7 @@ export class SimpleConversationView extends LitElement {
 						return this.formatStringContent(block.text);
 					} else if (block.type === "thinking") {
 						const thinkingBlock = block as any;
-						return html`
-							<div class="mt-4 mb-4">
-								<div class="text-gray-500 italic">
-									<em>Thinking</em>
-								</div>
-								<div class="text-gray-400 mt-2 markdown-content">
-									${unsafeHTML(markdownToHtml(thinkingBlock.thinking || ""))}
-								</div>
-							</div>
-						`;
+						return this.renderThinkingBlock(thinkingBlock.thinking || "");
 					} else if (block.type === "tool_result") {
 						// Skip standalone tool_result blocks - they will be paired with tool_use
 						return html``;
@@ -144,50 +151,67 @@ export class SimpleConversationView extends LitElement {
 		return html`<pre>${JSON.stringify(content, null, 2)}</pre>`;
 	}
 
+	private extractTaggedBlocks(
+		content: string,
+		tagName: string,
+	): { blocks: string[]; remaining: string } {
+		const escapedPattern = new RegExp(`&lt;${tagName}&gt;([\\s\\S]*?)&lt;/${tagName}&gt;`, "g");
+		const rawPattern = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, "g");
+		const blocks: string[] = [];
+
+		for (const regex of [escapedPattern, rawPattern]) {
+			let match;
+			while ((match = regex.exec(content)) !== null) {
+				blocks.push(match[1].trim());
+			}
+		}
+
+		const remaining = content.replace(escapedPattern, "").replace(rawPattern, "").trim();
+		return { blocks, remaining };
+	}
+
+	private renderTaggedCollapsibleSections(
+		title: string,
+		blocks: string[],
+	): TemplateResult {
+		if (blocks.length === 0) {
+			return html``;
+		}
+
+		return this.renderCollapsibleSection(
+			title,
+			html`<div class="text-vs-muted">
+				${blocks.map(
+					(block, index) => html`
+						<div class="mb-4">
+							${blocks.length > 1
+								? html`<div class="text-vs-function font-bold mb-2">${title} ${index + 1}:</div>`
+								: ""}
+							<div class="markdown-content">${unsafeHTML(markdownToHtml(block))}</div>
+						</div>
+					`,
+				)}
+			</div>`,
+			{
+				titleClasses: "text-vs-muted",
+				containerClasses: "mt-4 mb-4",
+				count: blocks.length > 1 ? blocks.length : undefined,
+			},
+		);
+	}
+
 	private formatStringContent(content: string): TemplateResult {
-		// Check for system reminder blocks (handling both raw and HTML-escaped delimiters)
-		const systemReminderRegexEscaped = /&lt;system-reminder&gt;([\s\S]*?)&lt;\/system-reminder&gt;/g;
-		const systemReminderRegexRaw = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
-		const systemReminders: string[] = [];
-		let match;
-
-		// Extract all system reminder blocks (escaped)
-		while ((match = systemReminderRegexEscaped.exec(content)) !== null) {
-			systemReminders.push(match[1].trim());
-		}
-
-		// Extract all system reminder blocks (raw)
-		while ((match = systemReminderRegexRaw.exec(content)) !== null) {
-			systemReminders.push(match[1].trim());
-		}
-
-		// Remove system reminder blocks from main content
-		let mainContent = content.replace(systemReminderRegexEscaped, "").replace(systemReminderRegexRaw, "").trim();
+		const { blocks: extremelyImportantBlocks, remaining: afterExtremelyImportant } =
+			this.extractTaggedBlocks(content, "EXTREMELY_IMPORTANT");
+		const { blocks: systemReminderBlocks, remaining: mainContent } = this.extractTaggedBlocks(
+			afterExtremelyImportant,
+			"system-reminder",
+		);
 
 		return html`
 			${mainContent ? html`<div class="mt-4 markdown-content">${unsafeHTML(markdownToHtml(mainContent))}</div>` : ""}
-			${systemReminders.length > 0
-				? this.renderCollapsibleSection(
-						"System Reminder",
-						html`<div class="text-vs-muted">
-							${systemReminders.map(
-								(reminder, index) => html`
-									<div class="mb-4">
-										${systemReminders.length > 1
-											? html`<div class="text-vs-function font-bold mb-2">Reminder ${index + 1}:</div>`
-											: ""}
-										<div class="markdown-content">${unsafeHTML(markdownToHtml(reminder))}</div>
-									</div>
-								`,
-							)}
-						</div>`,
-						{
-							titleClasses: "text-vs-muted",
-							containerClasses: "mt-4 mb-4",
-							count: systemReminders.length > 1 ? systemReminders.length : undefined,
-						},
-					)
-				: ""}
+			${this.renderTaggedCollapsibleSections("Extremely Important", extremelyImportantBlocks)}
+			${this.renderTaggedCollapsibleSections("System Reminder", systemReminderBlocks)}
 		`;
 	}
 
@@ -223,16 +247,7 @@ export class SimpleConversationView extends LitElement {
 						return html`<div class="mt-4 markdown-content">${unsafeHTML(markdownToHtml(block.text))}</div>`;
 					} else if (block.type === "thinking") {
 						const thinkingBlock = block as any;
-						return html`
-							<div class="mt-4 mb-4">
-								<div class="text-gray-500 italic">
-									<em>Thinking</em>
-								</div>
-								<div class="text-gray-400 mt-2 markdown-content">
-									${unsafeHTML(markdownToHtml(thinkingBlock.thinking || ""))}
-								</div>
-							</div>
-						`;
+						return this.renderThinkingBlock(thinkingBlock.thinking || "");
 					} else if (block.type === "tool_use") {
 						if (block.name === "TodoWrite") {
 							return html`

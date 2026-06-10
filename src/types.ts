@@ -38,6 +38,7 @@ export interface HTMLGenerationData {
 	timestamp: string;
 	title?: string;
 	includeAllRequests?: boolean;
+	tool?: string;
 }
 
 export interface TemplateReplacements {
