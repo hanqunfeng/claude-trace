@@ -130,15 +130,25 @@ do_publish() {
 }
 
 verify_publish() {
-	local version published
+	local version published attempt max_attempts
 	version=$(get_package_version)
+	max_attempts=10
 	log "验证 npm 上的版本..."
-	published=$(npm view "$PACKAGE" version)
-	[[ "$published" == "$version" ]] || die "发布验证失败: npm=$published, 本地=$version"
-	log "发布成功: $PACKAGE@$version"
-	echo ""
-	echo "  npm:  https://www.npmjs.com/package/${PACKAGE#@}"
-	echo "  安装: npm install -g $PACKAGE"
+	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+		published=$(npm view "$PACKAGE" version --prefer-online 2>/dev/null || echo "")
+		if [[ "$published" == "$version" ]]; then
+			log "发布成功: $PACKAGE@$version"
+			echo ""
+			echo "  npm:  https://www.npmjs.com/package/${PACKAGE#@}"
+			echo "  安装: npm install -g $PACKAGE"
+			return 0
+		fi
+		if [[ $attempt -lt $max_attempts ]]; then
+			log "等待 npm 注册表同步 ($attempt/$max_attempts): npm=$published, 本地=$version"
+			sleep 3
+		fi
+	done
+	die "发布验证失败: npm=$published, 本地=$version（已重试 $max_attempts 次）"
 }
 
 ensure_git_tag() {
