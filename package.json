@@ -1,6 +1,6 @@
 {
 	"name": "@hanqunfeng/claude-trace",
-	"version": "3.0.4",
+	"version": "3.0.5",
 	"description": "Record API traffic from Claude Code, OpenCode, and Codex CLI",
 	"main": "dist/index.js",
 	"bin": {
