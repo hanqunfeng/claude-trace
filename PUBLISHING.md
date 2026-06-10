@@ -46,6 +46,22 @@ npm whoami    # 应输出 hanqunfeng
 
 > **安全提示：** 不要将 Token 写入项目目录或提交到 GitHub。若泄露，立即在 npm 网站撤销并重新创建。
 
+### 4. 配置 GitHub CLI（创建 Release 时需要）
+
+发布脚本在 npm 发布成功后会自动在 GitHub 创建 Release。需要安装并登录 [GitHub CLI](https://cli.github.com/)：
+
+```bash
+# macOS
+brew install gh
+
+# 登录（需有 hanqunfeng/claude-trace 仓库的写权限）
+gh auth login
+gh auth status    # 应显示已登录
+gh repo view hanqunfeng/claude-trace   # 确认可访问仓库
+```
+
+若只想发布到 npm、跳过 GitHub Release，使用 `--no-github` 参数（见下方发布脚本说明）。
+
 ## 发布包内容
 
 `package.json` 中 `files` 字段控制发布内容，当前包含：
@@ -148,16 +164,18 @@ claude-trace --help
 |------|------|
 | `npm run publish:check` | 仅运行发布前检查（typecheck + build + pack 预览） |
 | `npm run publish:dry-run` | 同 check，明确标注不发布 |
-| `npm run publish:patch` | 升补丁版本 → git push → 发布 |
-| `npm run publish:minor` | 升次版本 → git push → 发布 |
-| `npm run publish:major` | 升主版本 → git push → 发布 |
-| `npm run publish:release` | 发布当前版本（不升版本号） |
+| `npm run publish:patch` | 升补丁版本 → git push → 发布 → GitHub Release |
+| `npm run publish:minor` | 升次版本 → git push → 发布 → GitHub Release |
+| `npm run publish:major` | 升主版本 → git push → 发布 → GitHub Release |
+| `npm run publish:release` | 发布当前版本（不升版本号）→ GitHub Release |
 
 或直接调用脚本：
 
 ```bash
 chmod +x scripts/publish.sh   # 首次需要
 ./scripts/publish.sh patch
+./scripts/publish.sh patch --no-github              # 仅发 npm，跳过 GitHub Release
+./scripts/publish.sh --github-notes RELEASE.md patch  # 使用自定义 Release 说明
 ```
 
 ### 脚本会自动执行
@@ -169,6 +187,9 @@ chmod +x scripts/publish.sh   # 首次需要
 5. （可选）`npm version` 升版本并 push + tags
 6. `npm publish --access public`
 7. 验证 npm 上的版本与本地一致
+8. 创建 GitHub Release（tag 为 `vX.Y.Z`，自动生成变更说明；已存在则跳过）
+
+`npm run publish:check` 会额外验证 `gh auth status`（除非传入 `--no-github`）。
 
 ## 快速参考（手动）
 
@@ -229,15 +250,21 @@ Token 到期前：
 3. 验证：`npm whoami`
 4. 撤销旧 Token
 
-## 版本与 Git 同步建议
+## 版本与 Git / GitHub 同步
 
-使用发布脚本时，`patch` / `minor` / `major` 会自动执行 `npm version`、创建 git tag 并 push：
+使用发布脚本时，`patch` / `minor` / `major` 会自动执行 `npm version`、创建 git tag 并 push，npm 发布成功后创建 GitHub Release：
 
 ```bash
 npm run publish:patch
 ```
 
-在 GitHub 创建 Release 并附上变更说明（如有），便于用户追踪版本。
+Release 说明默认由 GitHub 根据 commit/PR 自动生成，并在顶部附上 `npm install -g` 安装命令。若需自定义说明，准备 Markdown 文件后：
+
+```bash
+./scripts/publish.sh --github-notes RELEASE.md patch
+```
+
+Release 页面示例：https://github.com/hanqunfeng/claude-trace/releases
 
 ## 相关链接
 
