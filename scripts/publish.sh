@@ -174,12 +174,18 @@ verify_publish() {
 remote_has_tag() {
 	local tag="$1" output
 	output=$(git ls-remote --tags origin "refs/tags/${tag}" 2>&1) || return 2
-	echo "$output" | grep -q "refs/tags/${tag}"
+	if echo "$output" | grep -q "refs/tags/${tag}"; then
+		return 0
+	fi
+	return 1
 }
 
 gh_release_exists() {
-	local tag="$1" repo="$2" err
-	err=$(gh release view "$tag" --repo "$repo" 2>&1) && return 0
+	local tag="$1" repo="$2" err rc=0
+	err=$(gh release view "$tag" --repo "$repo" 2>&1) || rc=$?
+	if [[ $rc -eq 0 ]]; then
+		return 0
+	fi
 	if echo "$err" | grep -qiE 'release not found|could not find'; then
 		return 1
 	fi
@@ -276,10 +282,10 @@ create_github_release() {
 
 	ensure_git_tag "$tag"
 
-	local attempt release_status
+	log "检查 GitHub Release $tag..."
+	local attempt release_status=1
 	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
-		gh_release_exists "$tag" "$repo"
-		release_status=$?
+		gh_release_exists "$tag" "$repo" && release_status=0 || release_status=$?
 		if [[ $release_status -eq 0 ]]; then
 			log "GitHub Release $tag 已存在，跳过"
 			echo "  GitHub: https://github.com/${repo}/releases/tag/${tag}"
