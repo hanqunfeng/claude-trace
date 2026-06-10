@@ -4,22 +4,23 @@ Always read `README.md` at the beginning of a session.
 
 ## Project Summary
 
-`@hanqunfeng/claude-trace` records coding-agent API traffic and renders self-contained HTML reports. Fork of mariozechner/claude-trace with **Claude Code V2+ native binary support** and **OpenCode support** via a separate `opencode-trace` CLI.
+`@hanqunfeng/claude-trace` records coding-agent API traffic and renders self-contained HTML reports. Fork of mariozechner/claude-trace with **Claude Code V2+ native binary support**, **OpenCode support** via `opencode-trace`, and **Codex CLI support** via `codex-trace`.
 
 ## Multi-Tool Architecture
 
-Both CLIs share the same core pipeline via **Tool Profiles**:
+All CLIs share the same core pipeline via **Tool Profiles**:
 
 ```
-cli.ts / opencode-cli.ts  →  trace-runner.ts  →  reverse-proxy.ts / interceptor.ts
-                                    ↑
-                          tools/claude.ts | tools/opencode.ts
+cli.ts / opencode-cli.ts / codex-cli.ts  →  trace-runner.ts  →  reverse-proxy.ts / interceptor.ts
+                                              ↑
+                          tools/claude.ts | tools/opencode.ts | tools/codex.ts
 ```
 
 | Tool | CLI command | Log directory | Config injection |
 |------|-------------|---------------|------------------|
 | Claude Code | `claude-trace` | `.claude-trace/` | `ANTHROPIC_BASE_URL` + temp `CLAUDE_CONFIG_DIR` |
-| OpenCode | `opencode-trace` | `.opencode-trace/` | temp `OPENCODE_CONFIG` with `provider.anthropic.options.baseURL` |
+| OpenCode | `opencode-trace` | `.opencode-trace/` | `OPENCODE_CONFIG_CONTENT` runtime override |
+| Codex CLI | `codex-trace` | `.codex-trace/` | `CODEX_HOME` overlay with rewritten `config.toml` |
 
 ## Claude Code V2+ (Critical)
 
@@ -38,12 +39,19 @@ Proxy mode sets `ANTHROPIC_BASE_URL` to local proxy. If `~/.claude/settings.json
 
 OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config is read from `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, or `.opencode/opencode.json`. Runtime `OPENCODE_CONFIG_CONTENT` overrides all provider `baseURL` values. Model-based routing supports Anthropic (`@ai-sdk/anthropic`) and OpenAI (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) API formats via `src/openai-adapter.ts` and `src/proxy-routing.ts`.
 
+## Codex CLI
+
+Codex always uses **reverse proxy mode**. Config is read from `$CODEX_HOME/config.toml` (default `~/.codex/`). `src/codex-config-overlay.ts` builds a persistent overlay at `~/.claude-trace/codex-config-overlay/` that rewrites `openai_base_url`, `chatgpt_base_url`, and custom `model_providers.*.base_url` to the local proxy. Path-based upstream routing in `src/codex-routing.ts` handles OpenAI API Key (`/v1/responses`) vs ChatGPT OAuth (`/backend-api/codex/responses`). Codex uses OpenAI Responses API only; parsing via `src/openai-adapter.ts` (`openai-responses` format).
+
 ## Directory Layout
 
 ```
 src/
   cli.ts                        # claude-trace entry (thin wrapper)
   opencode-cli.ts               # opencode-trace entry (thin wrapper)
+  codex-cli.ts                  # codex-trace entry (thin wrapper)
+  codex-config-overlay.ts       # Codex TOML config overlay
+  codex-routing.ts              # Codex path-based upstream routing
   cli-common.ts                 # Shared arg parsing, HTML/index helpers
   trace-runner.ts               # Generic launch + proxy/interceptor dispatch
   tools/
@@ -51,6 +59,7 @@ src/
     binary-utils.ts             # isNativeBinary, resolveToJsFile
     claude.ts                   # Claude Code profile + token extraction
     opencode.ts                 # OpenCode profile
+    codex.ts                    # Codex CLI profile
   reverse-proxy.ts              # Native binary reverse proxy server
   interceptor.ts                # V1 fetch() hook (Claude only)
   interceptor-loader.js         # V1 --require hook (copied to dist/)
@@ -78,6 +87,7 @@ npm run dev          # predev compiles once, then watch mode
 npm run typecheck    # tsc --noEmit
 node dist/cli.js     # run claude-trace from source build
 node dist/opencode-cli.js  # run opencode-trace from source build
+node dist/codex-cli.js     # run codex-trace from source build
 ```
 
 **Important:** `tsc` only compiles `.ts` files. `interceptor-loader.js` and `token-extractor.js` must be copied to `dist/` (handled by `build` and `predev` scripts).
@@ -86,8 +96,8 @@ node dist/opencode-cli.js  # run opencode-trace from source build
 
 - **Avoid `any`** — use types from `src/types.ts` and `@anthropic-ai/sdk/resources/messages` (devDependency; `import type` only, not shipped to runtime)
 - **No self-referential npm dependency** — package does not depend on itself
-- **Package name:** `@hanqunfeng/claude-trace`, bin commands: `claude-trace`, `opencode-trace`
-- **Log directories:** `.claude-trace/` and `.opencode-trace/` in cwd (gitignored)
+- **Package name:** `@hanqunfeng/claude-trace`, bin commands: `claude-trace`, `opencode-trace`, `codex-trace`
+- **Log directories:** `.claude-trace/`, `.opencode-trace/`, and `.codex-trace/` in cwd (gitignored)
 - **Frontend is a separate package** — has its own `package.json`; run `npm run setup` to install both
 
 ## CLI Flags
@@ -95,6 +105,8 @@ node dist/opencode-cli.js  # run opencode-trace from source build
 **claude-trace:** `--include-all-requests`, `--include-sensitive-headers`, `--claude-path`, `--log`, `--no-open`, `--extract-token`, `--generate-html`, `--index`
 
 **opencode-trace:** `--include-all-requests`, `--include-sensitive-headers`, `--opencode-path`, `--log`, `--no-open`, `--generate-html`, `--index`
+
+**codex-trace:** `--include-all-requests`, `--include-sensitive-headers`, `--codex-path`, `--log`, `--no-open`, `--generate-html`, `--index`
 
 ## When Modifying Interception
 
@@ -107,7 +119,7 @@ node dist/opencode-cli.js  # run opencode-trace from source build
 | HTML report rendering | `src/html-generator.ts`, `frontend/src/` |
 | Conversation parsing | `src/shared-conversation-processor.ts` |
 
-After changes: `npm run typecheck && npm run build`, then test with `node dist/cli.js` and `node dist/opencode-cli.js`.
+After changes: `npm run typecheck && npm run build`, then test with `node dist/cli.js`, `node dist/opencode-cli.js`, and `node dist/codex-cli.js`.
 
 ## Common Pitfalls
 
@@ -116,3 +128,4 @@ After changes: `npm run typecheck && npm run build`, then test with `node dist/c
 3. **Assuming Claude is Node.js** — V2+ Homebrew/Cask installs are native binaries
 4. **Editing only `dist/`** — always change `src/` and rebuild; `fix/` is reference only
 5. **OpenCode multi-provider** — Built-in `models.dev` providers not listed in `opencode.json` are not intercepted; configured OpenAI/Anthropic providers are supported
+6. **Codex is Rust native** — always proxy mode; use `CODEX_HOME` overlay, not Node interceptor. WebSocket Responses disabled in overlay for MVP logging

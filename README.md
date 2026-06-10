@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Record API traffic from **Claude Code** and **OpenCode** while you work. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
+Record API traffic from **Claude Code**, **OpenCode**, and **Codex CLI** while you work. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
 
 **Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support and a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats).
 
@@ -12,8 +12,9 @@ Record API traffic from **Claude Code** and **OpenCode** while you work. Inspect
 |------|-------------|---------------|--------------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
+| **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; OpenAI Responses API |
 
-Both commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
+All commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
 
 ## Quick start
 
@@ -25,6 +26,9 @@ claude-trace
 
 # OpenCode
 opencode-trace
+
+# Codex CLI
+codex-trace
 ```
 
 When a session ends, the latest HTML report opens in your browser automatically (disable with `--no-open`).
@@ -44,8 +48,8 @@ git clone https://github.com/hanqunfeng/claude-trace.git
 cd claude-trace
 npm run setup   # installs root + frontend dependencies
 npm run build
-npm link        # optional: global `claude-trace` and `opencode-trace`
-# Without link: node dist/cli.js  /  node dist/opencode-cli.js
+npm link        # optional: global `claude-trace`, `opencode-trace`, and `codex-trace`
+# Without link: node dist/cli.js / node dist/opencode-cli.js / node dist/codex-cli.js
 ```
 
 ## Claude Code (`claude-trace`)
@@ -235,6 +239,61 @@ Use this when a model is not routed correctly, requests are missing from the log
 
 ---
 
+## Codex CLI (`codex-trace`)
+
+### Usage
+
+```bash
+# Start Codex TUI with logging
+codex-trace
+
+# One-shot headless prompt
+codex-trace --run-with exec "Explain async/await"
+
+# Generate HTML from a previous session
+codex-trace --generate-html .codex-trace/log-2025-01-01-12-00-00.jsonl
+
+# Conversation index
+codex-trace --index
+
+codex-trace --help
+```
+
+Logs: `.codex-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory.
+
+### How interception works
+
+Codex CLI is a native Rust binary. `codex-trace` starts a local reverse proxy and builds a config overlay at `~/.claude-trace/codex-config-overlay/` — **your original `~/.codex/config.toml` is never modified**.
+
+The overlay rewrites `openai_base_url`, `chatgpt_base_url`, and custom `model_providers.*.base_url` to point at the proxy. `auth.json` and session data are symlinked so ChatGPT OAuth continues to work. The proxy routes by request path:
+
+- `/v1/responses`, `/responses`, `/responses/compact` → OpenAI API Key or custom provider upstream
+- `/backend-api/codex/responses` → ChatGPT OAuth upstream
+
+```
+Codex CLI  →  codex-trace proxy (logs)  →  api.openai.com / chatgpt.com / custom provider
+```
+
+Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
+
+### CLI options
+
+| Flag | Description |
+|------|-------------|
+| `--codex-path PATH` | Path to Codex binary (auto-detected if omitted) |
+| `--include-all-requests` | Log all proxied API traffic, not just LLM API paths |
+| `--include-sensitive-headers` | Log auth tokens without redaction |
+| `--log NAME` | Custom log file base name |
+| `--no-open` | Don't open generated HTML in browser |
+| `--run-with ARGS...` | Pass remaining arguments to Codex |
+
+### Codex limitations
+
+- WebSocket Responses transport is disabled in the overlay (`supports_websockets = false`) so HTTP/SSE traffic can be logged.
+- Built-in provider IDs (`openai`, `ollama`, `lmstudio`) cannot be overridden via `model_providers`; interception uses `openai_base_url` / `chatgpt_base_url` instead.
+
+---
+
 ## Shared features
 
 ### HTML report
@@ -257,6 +316,8 @@ Each session produces a self-contained HTML file (embedded CSS/JS) you can open 
 claude-trace --index
 # or
 opencode-trace --index
+# or
+codex-trace --index
 ```
 
 Scans log files, summarizes meaningful conversations via Claude CLI, and generates a searchable `index.html`. **Note:** indexing uses additional API tokens.
@@ -266,6 +327,7 @@ Scans log files, summarizes meaningful conversations via Claude CLI, and generat
 - Node.js 16+
 - **Claude Code** CLI (V1 Node.js or V2+ native binary) for `claude-trace`
 - **OpenCode** CLI for `opencode-trace`
+- **Codex CLI** for `codex-trace`
 
 ## Development
 
@@ -281,9 +343,9 @@ npm run test:unit
 
 **Backend** (`src/`):
 
-- **CLI** (`cli.ts`, `opencode-cli.ts`) — thin entry points
+- **CLI** (`cli.ts`, `opencode-cli.ts`, `codex-cli.ts`) — thin entry points
 - **Trace Runner** (`trace-runner.ts`) — shared launch + proxy/interceptor dispatch
-- **Tool Profiles** (`tools/claude.ts`, `tools/opencode.ts`) — per-tool config, binary detection, upstream resolution
+- **Tool Profiles** (`tools/claude.ts`, `tools/opencode.ts`, `tools/codex.ts`) — per-tool config, binary detection, upstream resolution
 - **Reverse Proxy** (`reverse-proxy.ts`) — native-binary interception, real-time HTML generation
 - **Proxy Routing** (`proxy-routing.ts`) — model route resolution and upstream path normalization
 - **API Format** (`api-format.ts`) — format detection and display labels

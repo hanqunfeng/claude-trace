@@ -5,6 +5,8 @@ import { ReverseProxyServer } from "./reverse-proxy";
 import type { ToolProfile, TraceOptions } from "./tools/types";
 import { isNativeBinary, resolveToJsFile } from "./tools/binary-utils";
 import { isPersistentOverlayDir } from "./claude-config-overlay";
+import { isPersistentCodexOverlayDir } from "./codex-config-overlay";
+import type { ProviderRoute } from "./tools/types";
 import { log } from "./cli-common";
 
 function getLoaderPath(): string {
@@ -55,6 +57,9 @@ async function runNativeWithProxy(
 	}
 	console.log("");
 
+	const codexProviderRoutes: ProviderRoute[] | undefined =
+		profile.name === "codex" && providerRoutes.length > 0 ? providerRoutes : undefined;
+
 	const proxy = new ReverseProxyServer({
 		logDirectory: profile.logDirectory,
 		logBaseName: options.logBaseName,
@@ -64,6 +69,7 @@ async function runNativeWithProxy(
 		targetBaseUrl: upstreamBaseUrl,
 		routes,
 		modelRoutes: hasModelRoutes ? modelRoutes : undefined,
+		providerRoutes: codexProviderRoutes,
 		tool: profile.name,
 	});
 
@@ -93,7 +99,10 @@ async function runNativeWithProxy(
 	const { tmpDir, spawnEnv } = profile.prepareSpawnEnv(proxyInfo.url);
 	tmpConfigDir = tmpDir;
 
-	if (tmpConfigDir && isPersistentOverlayDir(tmpConfigDir)) {
+	if (
+		tmpConfigDir &&
+		(isPersistentOverlayDir(tmpConfigDir) || isPersistentCodexOverlayDir(tmpConfigDir))
+	) {
 		log(`Using ${profile.displayName} config overlay (original settings unchanged)`, "blue");
 	} else if (tmpConfigDir) {
 		log(`Using temporary ${profile.displayName} config (original config unchanged)`, "blue");

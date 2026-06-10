@@ -1,6 +1,8 @@
 export interface ProviderRoute {
 	id: string;
 	upstreamBaseUrl: string;
+	/** Request path prefixes that select this route (Codex multi-upstream). */
+	matchPathPrefixes?: string[];
 }
 
 export type ApiFormat = "anthropic" | "openai" | "openai-responses" | "unknown";

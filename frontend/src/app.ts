@@ -104,6 +104,7 @@ export class ClaudeApp extends LitElement {
 		const tool = this.data.metadata?.tool as string | undefined;
 		if (tool === "claude") return "claude-trace";
 		if (tool === "opencode") return "opencode-trace";
+		if (tool === "codex") return "codex-trace";
 		return "trace";
 	}
 

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	buildOpenAIChatCompletionFromSSE,
 	normalizeOpenAIChatRequest,
+	normalizeOpenAIResponsesRequest,
 	parseOpenAIChatCompletionBody,
 } from "../src/openai-adapter";
 
@@ -69,6 +70,38 @@ describe("parseOpenAIChatCompletionBody", () => {
 		assert.equal((message.content[0] as { text: string }).text, "Hi there");
 		assert.equal(message.usage.input_tokens, 10);
 		assert.equal(message.usage.output_tokens, 5);
+	});
+});
+
+describe("normalizeOpenAIResponsesRequest", () => {
+	it("parses Codex flat tools and input_text content", () => {
+		const request = normalizeOpenAIResponsesRequest({
+			model: "deepseek-v4-flash",
+			instructions: "You are Codex.",
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "hello" }],
+				},
+			],
+			tools: [
+				{
+					type: "function",
+					name: "exec_command",
+					description: "Runs a command.",
+					parameters: { type: "object", properties: { cmd: { type: "string" } } },
+				},
+			],
+		});
+
+		assert.equal(request.model, "deepseek-v4-flash");
+		assert.equal(request.system, "You are Codex.");
+		assert.equal(request.messages.length, 1);
+		assert.equal(request.messages[0].role, "user");
+		const text = request.messages[0].content?.[0];
+		assert.equal((text as { text?: string })?.text, "hello");
+		assert.equal(request.tools?.[0]?.name, "exec_command");
 	});
 });
 

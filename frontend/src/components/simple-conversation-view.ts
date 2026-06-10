@@ -170,6 +170,41 @@ export class SimpleConversationView extends LitElement {
 		return { blocks, remaining };
 	}
 
+	/**
+	 * Extract a single outermost tag wrapper. Codex blocks often mention nested
+	 * `<tag>...</tag>` examples inside backticks; non-greedy regex stops at the
+	 * first inner close tag and leaks the rest into the conversation view.
+	 */
+	private extractOutermostTaggedBlock(
+		content: string,
+		tagName: string,
+	): { block: string | null; remaining: string } {
+		const variants = [
+			{ open: `<${tagName}>`, close: `</${tagName}>` },
+			{ open: `&lt;${tagName}&gt;`, close: `&lt;/${tagName}&gt;` },
+		];
+
+		const trimmed = content.trim();
+		for (const { open, close } of variants) {
+			if (!trimmed.startsWith(open)) {
+				continue;
+			}
+
+			const lastClose = trimmed.lastIndexOf(close);
+			if (lastClose <= open.length) {
+				return { block: null, remaining: content };
+			}
+
+			const block = trimmed.slice(open.length, lastClose).trim();
+			const after = trimmed.slice(lastClose + close.length).trim();
+			const leading = content.slice(0, content.indexOf(trimmed));
+			const remaining = (leading + after).trim();
+			return { block, remaining };
+		}
+
+		return { block: null, remaining: content };
+	}
+
 	private renderTaggedCollapsibleSections(
 		title: string,
 		blocks: string[],
@@ -200,9 +235,57 @@ export class SimpleConversationView extends LitElement {
 		);
 	}
 
+	private static readonly CODEX_CONTEXT_TAGS: ReadonlyArray<{ tag: string; title: string }> = [
+		{ tag: "permissions instructions", title: "Permissions Instructions" },
+		{ tag: "collaboration_mode", title: "Collaboration Mode" },
+		{ tag: "skills_instructions", title: "Skills Instructions" },
+		{ tag: "environment_context", title: "Environment Context" },
+	];
+
+	private isCodexContextOnlyText(content: string): boolean {
+		const { sections, remaining } = this.extractCodexContextSections(content);
+		if (sections.length === 0) {
+			return false;
+		}
+
+		const { remaining: afterExtremelyImportant } = this.extractTaggedBlocks(remaining, "EXTREMELY_IMPORTANT");
+		const { remaining: afterSystemReminder } = this.extractTaggedBlocks(afterExtremelyImportant, "system-reminder");
+		return afterSystemReminder.trim().length === 0;
+	}
+
+	private isCodexContextOnlyMessage(message: EnhancedMessageParam): boolean {
+		if (!Array.isArray(message.content) || message.content.length === 0) {
+			return false;
+		}
+
+		return message.content.every((block) => {
+			if (block.type !== "text" || !("text" in block)) {
+				return false;
+			}
+			return this.isCodexContextOnlyText(block.text);
+		});
+	}
+
+	private extractCodexContextSections(content: string): { sections: Array<{ title: string; blocks: string[] }>; remaining: string } {
+		const sections: Array<{ title: string; blocks: string[] }> = [];
+		let remaining = content;
+
+		for (const { tag, title } of SimpleConversationView.CODEX_CONTEXT_TAGS) {
+			const extracted = this.extractOutermostTaggedBlock(remaining, tag);
+			if (extracted.block) {
+				sections.push({ title, blocks: [extracted.block] });
+				remaining = extracted.remaining;
+			}
+		}
+
+		return { sections, remaining };
+	}
+
 	private formatStringContent(content: string): TemplateResult {
+		const { sections: codexContextSections, remaining: afterCodexContext } =
+			this.extractCodexContextSections(content);
 		const { blocks: extremelyImportantBlocks, remaining: afterExtremelyImportant } =
-			this.extractTaggedBlocks(content, "EXTREMELY_IMPORTANT");
+			this.extractTaggedBlocks(afterCodexContext, "EXTREMELY_IMPORTANT");
 		const { blocks: systemReminderBlocks, remaining: mainContent } = this.extractTaggedBlocks(
 			afterExtremelyImportant,
 			"system-reminder",
@@ -210,6 +293,7 @@ export class SimpleConversationView extends LitElement {
 
 		return html`
 			${mainContent ? html`<div class="mt-4 markdown-content">${unsafeHTML(markdownToHtml(mainContent))}</div>` : ""}
+			${codexContextSections.map(({ title, blocks }) => this.renderTaggedCollapsibleSections(title, blocks))}
 			${this.renderTaggedCollapsibleSections("Extremely Important", extremelyImportantBlocks)}
 			${this.renderTaggedCollapsibleSections("System Reminder", systemReminderBlocks)}
 		`;
@@ -729,11 +813,15 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 					.map(
 						(message, msgIndex) => html`
 							<div class="mb-4">
-								<div
-									class="font-bold uppercase ${message.role === "user" ? "text-vs-user" : "text-vs-assistant"}"
-								>
-									<span>${message.role}</span>
-								</div>
+								${this.isCodexContextOnlyMessage(message as EnhancedMessageParam)
+									? ""
+									: html`
+											<div
+												class="font-bold uppercase ${message.role === "user" ? "text-vs-user" : "text-vs-assistant"}"
+											>
+												<span>${message.role}</span>
+											</div>
+										`}
 								<div class="text-vs-text">
 									${this.formatContent(message.content, (message as EnhancedMessageParam).toolResults)}
 								</div>

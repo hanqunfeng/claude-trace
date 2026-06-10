@@ -53,15 +53,32 @@ interface OpenAIChatCompletion {
 	};
 }
 
+interface OpenAIResponsesInputItem {
+	type?: string;
+	role?: string;
+	id?: string;
+	call_id?: string;
+	name?: string;
+	arguments?: string;
+	output?: string;
+	content?: string | Array<{ type: string; text?: string }>;
+	summary?: Array<{ type: string; text?: string }>;
+}
+
+interface OpenAIResponsesOutputItem {
+	type: string;
+	id?: string;
+	role?: string;
+	name?: string;
+	arguments?: string;
+	call_id?: string;
+	content?: Array<{ type: string; text?: string }>;
+}
+
 interface OpenAIResponsesBody {
 	id?: string;
 	model?: string;
-	output?: Array<{
-		type: string;
-		id?: string;
-		role?: string;
-		content?: Array<{ type: string; text?: string }>;
-	}>;
+	output?: OpenAIResponsesOutputItem[];
 	usage?: {
 		input_tokens?: number;
 		output_tokens?: number;
@@ -80,6 +97,8 @@ function emptyUsage() {
 	};
 }
 
+const TEXT_PART_TYPES = new Set(["text", "input_text", "output_text"]);
+
 function toTextBlocks(content: OpenAIMessage["content"]): TextBlockParam[] {
 	if (content == null) {
 		return [];
@@ -88,19 +107,57 @@ function toTextBlocks(content: OpenAIMessage["content"]): TextBlockParam[] {
 		return content ? [{ type: "text", text: content }] : [];
 	}
 	return content
-		.filter((part) => part.type === "text" && part.text)
+		.filter((part) => TEXT_PART_TYPES.has(part.type) && part.text)
 		.map((part) => ({ type: "text" as const, text: part.text! }));
 }
 
-function mapOpenAITools(tools: OpenAITool[] | undefined): MessageCreateParams["tools"] {
+interface ResponsesApiTool {
+	type?: string;
+	name?: string;
+	description?: string;
+	parameters?: Record<string, unknown>;
+	function?: {
+		name: string;
+		description?: string;
+		parameters?: Record<string, unknown>;
+	};
+}
+
+function mapOpenAITools(tools: ResponsesApiTool[] | OpenAITool[] | undefined): MessageCreateParams["tools"] {
 	if (!tools?.length) {
 		return undefined;
 	}
-	return tools.map((tool) => ({
-		name: tool.function.name,
-		description: tool.function.description,
-		input_schema: tool.function.parameters || { type: "object", properties: {} },
-	})) as MessageCreateParams["tools"];
+
+	const mapped = tools
+		.map((tool) => {
+			const flat = tool as ResponsesApiTool;
+			if (flat.name) {
+				return {
+					name: flat.name,
+					description: flat.description,
+					input_schema: flat.parameters || { type: "object", properties: {} },
+				};
+			}
+			const nested = tool as OpenAITool;
+			if (nested.function?.name) {
+				return {
+					name: nested.function.name,
+					description: nested.function.description,
+					input_schema: nested.function.parameters || { type: "object", properties: {} },
+				};
+			}
+			if (flat.type && flat.type !== "function") {
+				return {
+					name: flat.type,
+					description: flat.description,
+					input_schema: flat.parameters || { type: "object", properties: {} },
+				};
+			}
+			return null;
+		})
+		.filter((tool): tool is NonNullable<typeof tool> => tool !== null);
+
+	return mapped.length > 0 ? (mapped as MessageCreateParams["tools"]) : undefined;
 }
 
 export function normalizeOpenAIChatRequest(body: unknown): MessageCreateParams {
@@ -186,11 +243,56 @@ export function normalizeOpenAIChatRequest(body: unknown): MessageCreateParams {
 	};
 }
 
+function responsesInputToContent(item: OpenAIResponsesInputItem): MessageParam["content"] {
+	if (item.type === "function_call") {
+		let parsedInput: Record<string, unknown> = {};
+		try {
+			parsedInput = JSON.parse(item.arguments || "{}") as Record<string, unknown>;
+		} catch {
+			parsedInput = { _raw: item.arguments };
+		}
+		return [
+			{
+				type: "tool_use",
+				id: item.call_id || item.id || "unknown",
+				name: item.name || "unknown",
+				input: parsedInput,
+			} as ToolUseBlock,
+		];
+	}
+
+	if (item.type === "function_call_output") {
+		return [
+			{
+				type: "tool_result",
+				tool_use_id: item.call_id || "unknown",
+				content: item.output || "",
+			} as ToolResultBlockParam,
+		];
+	}
+
+	if (item.type === "reasoning") {
+		const summaryText = (item.summary || [])
+			.map((part) => (part.type === "summary_text" ? part.text || "" : ""))
+			.join("");
+		if (summaryText) {
+			return [{ type: "thinking", thinking: summaryText, signature: "" }];
+		}
+		return [];
+	}
+
+	if (item.type === "message" || item.role) {
+		return toTextBlocks(item.content as OpenAIMessage["content"]);
+	}
+
+	return toTextBlocks(item.content as OpenAIMessage["content"]);
+}
+
 export function normalizeOpenAIResponsesRequest(body: unknown): MessageCreateParams {
 	const req = body as {
 		model?: string;
 		instructions?: string;
-		input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+		input?: string | OpenAIResponsesInputItem[];
 		tools?: OpenAITool[];
 	};
 
@@ -200,10 +302,21 @@ export function normalizeOpenAIResponsesRequest(body: unknown): MessageCreatePar
 		messages.push({ role: "user", content: [{ type: "text", text: req.input }] });
 	} else if (Array.isArray(req.input)) {
 		for (const item of req.input) {
-			messages.push({
-				role: item.role === "assistant" ? "assistant" : "user",
-				content: toTextBlocks(item.content as OpenAIMessage["content"]),
-			});
+			const content = responsesInputToContent(item);
+			if (!content || (Array.isArray(content) && content.length === 0)) {
+				continue;
+			}
+
+			const role =
+				item.type === "function_call"
+					? "assistant"
+					: item.type === "function_call_output" || item.type === "reasoning"
+						? "user"
+						: item.role === "assistant"
+							? "assistant"
+							: "user";
+
+			messages.push({ role, content });
 		}
 	}
 
@@ -284,18 +397,57 @@ export function parseOpenAIChatCompletionBody(body: unknown, model = "unknown"):
 	return message;
 }
 
+function parseResponsesOutputItem(item: OpenAIResponsesOutputItem): ContentBlock[] {
+	const blocks: ContentBlock[] = [];
+
+	if (item.type === "message" && item.content) {
+		for (const part of item.content) {
+			if (part.type === "output_text" || part.type === "text") {
+				blocks.push({ type: "text", text: part.text || "", citations: null });
+			}
+		}
+		return blocks;
+	}
+
+	if (item.type === "function_call") {
+		let parsedInput: Record<string, unknown> = {};
+		try {
+			parsedInput = JSON.parse(item.arguments || "{}") as Record<string, unknown>;
+		} catch {
+			parsedInput = { _raw: item.arguments };
+		}
+		blocks.push({
+			type: "tool_use",
+			id: item.call_id || item.id || "unknown",
+			name: item.name || "unknown",
+			input: parsedInput,
+		});
+		return blocks;
+	}
+
+	if (item.type === "reasoning") {
+		const summaryText = (item.content || [])
+			.map((part) => (part.type === "summary_text" ? part.text || "" : ""))
+			.join("");
+		if (summaryText) {
+			blocks.push({ type: "thinking", thinking: summaryText, signature: "" });
+		}
+	}
+
+	return blocks;
+}
+
 export function parseOpenAIResponsesBody(body: unknown, model = "unknown"): Message {
 	const response = body as OpenAIResponsesBody;
 	const content: ContentBlock[] = [];
+	let hasToolUse = false;
 
 	for (const item of response.output || []) {
-		if (item.type === "message" && item.content) {
-			for (const part of item.content) {
-				if (part.type === "output_text" || part.type === "text") {
-					content.push({ type: "text", text: part.text || "", citations: null });
-				}
-			}
+		const blocks = parseResponsesOutputItem(item);
+		if (item.type === "function_call") {
+			hasToolUse = true;
 		}
+		content.push(...blocks);
 	}
 
 	return {
@@ -304,7 +456,7 @@ export function parseOpenAIResponsesBody(body: unknown, model = "unknown"): Mess
 		role: "assistant",
 		model: response.model || model,
 		content,
-		stop_reason: "end_turn",
+		stop_reason: hasToolUse ? "tool_use" : "end_turn",
 		stop_sequence: null,
 		usage: {
 			...emptyUsage(),
@@ -422,6 +574,7 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 	};
 
 	let text = "";
+	const functionCalls = new Map<string, OpenAIResponsesOutputItem>();
 
 	for (const chunk of chunks) {
 		const record = chunk as Record<string, unknown>;
@@ -438,6 +591,27 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 		const type = record.type;
 		if (type === "response.output_text.delta" && typeof record.delta === "string") {
 			text += record.delta;
+		} else if (type === "response.function_call_arguments.delta") {
+			const itemId = typeof record.item_id === "string" ? record.item_id : "default";
+			if (!functionCalls.has(itemId)) {
+				functionCalls.set(itemId, {
+					type: "function_call",
+					id: itemId,
+					call_id: itemId,
+					name: "",
+					arguments: "",
+				});
+			}
+			const call = functionCalls.get(itemId)!;
+			if (typeof record.delta === "string") {
+				call.arguments = (call.arguments || "") + record.delta;
+			}
+		} else if (type === "response.output_item.added" && record.item) {
+			const item = record.item as OpenAIResponsesOutputItem;
+			if (item.type === "function_call") {
+				const itemId = item.call_id || item.id || "default";
+				functionCalls.set(itemId, { ...item, arguments: item.arguments || "" });
+			}
 		} else if (type === "response.completed" && record.response) {
 			return record.response as OpenAIResponsesBody;
 		}
@@ -445,6 +619,13 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 
 	if (result.output?.[0]?.content?.[0]) {
 		result.output[0].content[0].text = text;
+	}
+
+	if (functionCalls.size > 0) {
+		result.output = [
+			...(text ? [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }] : []),
+			...functionCalls.values(),
+		];
 	}
 
 	return result;

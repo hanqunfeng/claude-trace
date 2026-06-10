@@ -15,9 +15,10 @@ import {
 	parseOpenAIResponsesBody,
 } from "./openai-adapter";
 import { inferApiFormatFromUrl } from "./api-format";
+import { resolveCodexRouteTarget } from "./codex-routing";
 import { normalizeUpstreamPath, resolveModelRoute, inferApiFormatFromPath } from "./proxy-routing";
 import type { RawPair, SSEEvent } from "./types";
-import type { ApiFormat, ModelRoute } from "./tools/types";
+import type { ApiFormat, ModelRoute, ProviderRoute } from "./tools/types";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 
 export interface ReverseProxyConfig {
@@ -30,6 +31,7 @@ export interface ReverseProxyConfig {
 	targetBaseUrl?: string;
 	routes?: Record<string, string>;
 	modelRoutes?: Record<string, ModelRoute>;
+	providerRoutes?: ProviderRoute[];
 	tool?: string;
 }
 
@@ -64,6 +66,9 @@ const LLM_API_PATHS = [
 	"/v1/chat/completions",
 	"/chat/completions",
 	"/v1/responses",
+	"/responses",
+	"/responses/compact",
+	"/backend-api/codex/responses",
 ];
 
 function isLlmApiPath(urlPath: string | undefined): boolean {
@@ -179,6 +184,7 @@ export class ReverseProxyServer {
 	private readonly tool?: string;
 	private readonly routes?: Record<string, string>;
 	private readonly modelRoutes?: Record<string, ModelRoute>;
+	private readonly providerRoutes?: ProviderRoute[];
 
 	constructor(config: ReverseProxyConfig = {}) {
 		const target = parseTargetBaseUrl(config.targetBaseUrl);
@@ -190,6 +196,7 @@ export class ReverseProxyServer {
 		this.tool = config.tool;
 		this.routes = config.routes;
 		this.modelRoutes = config.modelRoutes;
+		this.providerRoutes = config.providerRoutes;
 
 		this.config = {
 			port: config.port || 0,
@@ -356,9 +363,13 @@ export class ReverseProxyServer {
 				return;
 			}
 
-			const routeTarget =
+			let routeTarget =
 				modelTarget ??
 				resolveRouteTarget(req.url, this.routes, fallback);
+
+			if (this.tool === "codex" && this.providerRoutes?.length) {
+				routeTarget = resolveCodexRouteTarget(req.url, this.providerRoutes, fallback);
+			}
 
 			const upstreamPath = routeTarget.upstreamDisplayPath;
 			const upstreamUrl = `${routeTarget.protocol}//${routeTarget.targetHost}${upstreamPath}`;

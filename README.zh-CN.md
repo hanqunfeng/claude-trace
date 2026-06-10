@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-记录 **Claude Code** 与 **OpenCode** 的 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
+记录 **Claude Code**、**OpenCode** 与 **Codex CLI** 的 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
 
 **[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制，并提供独立的 **[OpenCode](https://opencode.ai)** 命令，支持多 provider 拦截（Anthropic 与 OpenAI API 格式）。
 
@@ -12,8 +12,9 @@
 |------|----------|----------|----------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式 |
+| **Codex CLI** | `codex-trace` | `.codex-trace/` | 反向代理（`CODEX_HOME` 覆盖）；OpenAI Responses API |
 
-两条命令共用同一套 HTML 报告界面、JSONL/JSON 导出，以及 `--index` 会话摘要功能。
+三条命令共用同一套 HTML 报告界面、JSONL/JSON 导出，以及 `--index` 会话摘要功能。
 
 ## 快速开始
 
@@ -25,6 +26,9 @@ claude-trace
 
 # OpenCode
 opencode-trace
+
+# Codex CLI
+codex-trace
 ```
 
 会话结束后会自动在浏览器中打开最新 HTML 报告（可用 `--no-open` 关闭）。
@@ -44,8 +48,8 @@ git clone https://github.com/hanqunfeng/claude-trace.git
 cd claude-trace
 npm run setup   # 安装根目录 + frontend 依赖
 npm run build
-npm link        # 可选：全局可用 claude-trace 与 opencode-trace
-# 不 link 则用 node dist/cli.js / node dist/opencode-cli.js
+npm link        # 可选：全局可用 claude-trace、opencode-trace 与 codex-trace
+# 不 link 则用 node dist/cli.js / node dist/opencode-cli.js / node dist/codex-cli.js
 ```
 
 ## Claude Code（`claude-trace`）
@@ -235,6 +239,55 @@ OPENCODE_TRACE_DEBUG=1 opencode-trace
 
 ---
 
+## Codex CLI（`codex-trace`）
+
+### 用法
+
+```bash
+# 启动 Codex TUI 并记录流量
+codex-trace
+
+# 无头单次执行
+codex-trace --run-with exec "Explain async/await"
+
+# 从历史日志生成 HTML
+codex-trace --generate-html .codex-trace/log-2025-01-01-12-00-00.jsonl
+
+# 生成会话索引
+codex-trace --index
+
+codex-trace --help
+```
+
+日志路径：当前目录 `.codex-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}`。
+
+### 拦截原理
+
+Codex CLI 为 Rust 原生二进制。`codex-trace` 启动本地反向代理，并在 `~/.claude-trace/codex-config-overlay/` 构建配置覆盖层——**不会修改原始 `~/.codex/config.toml`**。
+
+覆盖层将 `openai_base_url`、`chatgpt_base_url` 及自定义 `model_providers.*.base_url` 改写为代理地址。`auth.json` 与会话数据通过 symlink 保留，ChatGPT OAuth 可继续使用。代理按请求路径路由：
+
+- `/v1/responses`、`/responses`、`/responses/compact` → OpenAI API Key 或自定义 provider 上游
+- `/backend-api/codex/responses` → ChatGPT OAuth 上游
+
+### CLI 选项
+
+| 参数 | 说明 |
+|------|------|
+| `--codex-path PATH` | Codex 二进制路径（省略则自动检测） |
+| `--include-all-requests` | 记录所有代理流量，不仅限于 LLM API 路径 |
+| `--include-sensitive-headers` | 不脱敏记录认证头 |
+| `--log NAME` | 自定义日志文件名前缀 |
+| `--no-open` | 不自动打开 HTML |
+| `--run-with ARGS...` | 将后续参数传给 Codex |
+
+### Codex 限制
+
+- 覆盖层强制 `supports_websockets = false`，确保 HTTP/SSE 流量可被记录。
+- 内置 provider ID（`openai`、`ollama`、`lmstudio`）不能通过 `model_providers` 覆盖；拦截依赖 `openai_base_url` / `chatgpt_base_url`。
+
+---
+
 ## 共用功能
 
 ### HTML 报告
@@ -257,6 +310,8 @@ OPENCODE_TRACE_DEBUG=1 opencode-trace
 claude-trace --index
 # 或
 opencode-trace --index
+# 或
+codex-trace --index
 ```
 
 扫描日志文件，通过 Claude CLI 为有意义会话生成摘要，并输出可搜索的 `index.html`。**注意：** 索引会产生额外 API token 消耗。
@@ -266,6 +321,7 @@ opencode-trace --index
 - Node.js 16+
 - **Claude Code** CLI（V1 Node.js 或 V2+ 原生二进制），用于 `claude-trace`
 - **OpenCode** CLI，用于 `opencode-trace`
+- **Codex CLI**，用于 `codex-trace`
 
 ## 开发
 
@@ -281,9 +337,9 @@ npm run test:unit
 
 **后端**（`src/`）：
 
-- **CLI**（`cli.ts`、`opencode-cli.ts`）— 薄入口
+- **CLI**（`cli.ts`、`opencode-cli.ts`、`codex-cli.ts`）— 薄入口
 - **Trace Runner**（`trace-runner.ts`）— 通用启动与代理/拦截器分发
-- **Tool Profiles**（`tools/claude.ts`、`tools/opencode.ts`）— 各工具配置、二进制检测、上游解析
+- **Tool Profiles**（`tools/claude.ts`、`tools/opencode.ts`、`tools/codex.ts`）— 各工具配置、二进制检测、上游解析
 - **Reverse Proxy**（`reverse-proxy.ts`）— 原生二进制拦截，实时 HTML 生成
 - **Proxy Routing**（`proxy-routing.ts`）— 模型路由解析与上游路径规范化
 - **API Format**（`api-format.ts`）— 格式检测与展示标签

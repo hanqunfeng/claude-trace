@@ -1,11 +1,12 @@
 {
 	"name": "@hanqunfeng/claude-trace",
 	"version": "3.0.4",
-	"description": "Record all your interactions with Claude Code as you develop your projects",
+	"description": "Record API traffic from Claude Code, OpenCode, and Codex CLI",
 	"main": "dist/index.js",
 	"bin": {
 		"claude-trace": "dist/cli.js",
-		"opencode-trace": "dist/opencode-cli.js"
+		"opencode-trace": "dist/opencode-cli.js",
+		"codex-trace": "dist/codex-cli.js"
 	},
 	"scripts": {
 		"build": "tsc && cp src/interceptor-loader.js src/token-extractor.js dist/ && npm run build:frontend",
@@ -39,6 +40,7 @@
 	"keywords": [
 		"claude",
 		"opencode",
+		"codex",
 		"anthropic",
 		"logging",
 		"api",
@@ -69,5 +71,8 @@
 	"bugs": {
 		"url": "https://github.com/hanqunfeng/claude-trace/issues"
 	},
-	"homepage": "https://github.com/hanqunfeng/claude-trace#readme"
+	"homepage": "https://github.com/hanqunfeng/claude-trace#readme",
+	"dependencies": {
+		"smol-toml": "^1.6.1"
+	}
 }
