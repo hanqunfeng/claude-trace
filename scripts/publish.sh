@@ -19,9 +19,28 @@ NPM_USER="hanqunfeng"
 PACKAGE="@hanqunfeng/claude-trace"
 SKIP_GITHUB=false
 GITHUB_NOTES_FILE=""
+NETWORK_MAX_ATTEMPTS=10
+NETWORK_RETRY_DELAY=3
 
 log() { echo "==> $*"; }
 die() { echo "错误: $*" >&2; exit 1; }
+warn() { echo "警告: $*" >&2; }
+
+retry_network() {
+	local desc="$1"
+	shift
+	local attempt
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		if "$@"; then
+			return 0
+		fi
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "网络操作失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS): $desc"
+			sleep "$NETWORK_RETRY_DELAY"
+		fi
+	done
+	return 1
+}
 
 usage() {
 	cat <<EOF
@@ -120,8 +139,10 @@ push_git() {
 		return
 	fi
 	log "推送到远程..."
-	git push origin HEAD
-	git push origin --tags
+	retry_network "git push origin HEAD" git push origin HEAD \
+		|| die "git push 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
+	retry_network "git push origin --tags" git push origin --tags \
+		|| die "git push --tags 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
 }
 
 do_publish() {
@@ -130,11 +151,10 @@ do_publish() {
 }
 
 verify_publish() {
-	local version published attempt max_attempts
+	local version published attempt
 	version=$(get_package_version)
-	max_attempts=10
 	log "验证 npm 上的版本..."
-	for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
 		published=$(npm view "$PACKAGE" version --prefer-online 2>/dev/null || echo "")
 		if [[ "$published" == "$version" ]]; then
 			log "发布成功: $PACKAGE@$version"
@@ -143,28 +163,57 @@ verify_publish() {
 			echo "  安装: npm install -g $PACKAGE"
 			return 0
 		fi
-		if [[ $attempt -lt $max_attempts ]]; then
-			log "等待 npm 注册表同步 ($attempt/$max_attempts): npm=$published, 本地=$version"
-			sleep 3
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "等待 npm 注册表同步 ($attempt/$NETWORK_MAX_ATTEMPTS): npm=$published, 本地=$version"
+			sleep "$NETWORK_RETRY_DELAY"
 		fi
 	done
-	die "发布验证失败: npm=$published, 本地=$version（已重试 $max_attempts 次）"
+	die "发布验证失败: npm=$published, 本地=$version（已重试 $NETWORK_MAX_ATTEMPTS 次）"
+}
+
+remote_has_tag() {
+	local tag="$1" output
+	output=$(git ls-remote --tags origin "refs/tags/${tag}" 2>&1) || return 2
+	echo "$output" | grep -q "refs/tags/${tag}"
+}
+
+gh_release_exists() {
+	local tag="$1" repo="$2" err
+	err=$(gh release view "$tag" --repo "$repo" 2>&1) && return 0
+	if echo "$err" | grep -qiE 'release not found|could not find'; then
+		return 1
+	fi
+	return 2
 }
 
 ensure_git_tag() {
-	local tag="$1"
+	local tag="$1" attempt remote_status
 	if git rev-parse "$tag" >/dev/null 2>&1; then
 		log "git tag $tag 已存在"
 	else
 		log "创建 git tag $tag..."
 		git tag "$tag"
 	fi
-	if git ls-remote --tags origin "refs/tags/${tag}" | grep -q "refs/tags/${tag}"; then
-		log "远程 tag $tag 已存在"
-	else
-		log "推送 tag $tag 到远程..."
-		git push origin "$tag"
-	fi
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		remote_has_tag "$tag"
+		remote_status=$?
+		if [[ $remote_status -eq 0 ]]; then
+			log "远程 tag $tag 已存在"
+			return 0
+		fi
+		if [[ $remote_status -eq 1 ]]; then
+			log "推送 tag $tag 到远程..."
+			if retry_network "推送 tag $tag" git push origin "$tag"; then
+				return 0
+			fi
+			die "推送 tag $tag 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
+		fi
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "检查远程 tag 失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS): $tag"
+			sleep "$NETWORK_RETRY_DELAY"
+		fi
+	done
+	die "检查远程 tag $tag 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
 }
 
 build_release_notes() {
@@ -179,11 +228,21 @@ build_release_notes() {
 			[[ -f "$GITHUB_NOTES_FILE" ]] || die "Release 说明文件不存在: $GITHUB_NOTES_FILE"
 			cat "$GITHUB_NOTES_FILE"
 		else
-			local generated prev_tag
-			generated=$(gh api "repos/${repo}/releases/generate-notes" \
-				-f "tag_name=${tag}" \
-				-f "target_commitish=HEAD" \
-				--jq .body 2>/dev/null || true)
+			local generated prev_tag attempt
+			generated=""
+			for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+				generated=$(gh api "repos/${repo}/releases/generate-notes" \
+					-f "tag_name=${tag}" \
+					-f "target_commitish=HEAD" \
+					--jq .body 2>/dev/null || true)
+				if [[ -n "$generated" ]]; then
+					break
+				fi
+				if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+					log "生成 Release 说明失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS)"
+					sleep "$NETWORK_RETRY_DELAY"
+				fi
+			done
 			if [[ -n "$generated" ]]; then
 				echo "$generated"
 			else
@@ -217,20 +276,41 @@ create_github_release() {
 
 	ensure_git_tag "$tag"
 
-	if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-		log "GitHub Release $tag 已存在，跳过"
-		echo "  GitHub: https://github.com/${repo}/releases/tag/${tag}"
-		return
+	local attempt release_status
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		gh_release_exists "$tag" "$repo"
+		release_status=$?
+		if [[ $release_status -eq 0 ]]; then
+			log "GitHub Release $tag 已存在，跳过"
+			echo "  GitHub: https://github.com/${repo}/releases/tag/${tag}"
+			return 0
+		fi
+		if [[ $release_status -eq 1 ]]; then
+			break
+		fi
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "检查 GitHub Release 失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS): $tag"
+			sleep "$NETWORK_RETRY_DELAY"
+		fi
+	done
+	if [[ $release_status -eq 2 ]]; then
+		warn "无法确认 GitHub Release 状态（已重试 $NETWORK_MAX_ATTEMPTS 次），尝试创建..."
 	fi
 
 	notes_file=$(mktemp)
 	build_release_notes "$tag" "$repo" "$notes_file"
 
 	log "创建 GitHub Release $tag..."
-	gh release create "$tag" \
+	if ! retry_network "创建 GitHub Release $tag" gh release create "$tag" \
 		--repo "$repo" \
 		--title "$tag" \
-		--notes-file "$notes_file"
+		--notes-file "$notes_file"; then
+		rm -f "$notes_file"
+		warn "GitHub Release 创建失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
+		warn "npm 包可能已成功发布，请稍后手动执行:"
+		warn "  gh release create $tag --repo $repo --title $tag --generate-notes"
+		return 0
+	fi
 	rm -f "$notes_file"
 
 	log "GitHub Release 已创建"
