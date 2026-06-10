@@ -11,7 +11,15 @@ import type {
     ThinkingBlock,
     ToolUseBlock as ToolUseBlockType,
 } from "@anthropic-ai/sdk/resources/messages";
+import type { ApiFormat } from "./tools/types";
 import type { RawPair, BedrockInvocationMetrics } from "./types";
+import { formatApiFormatsDisplay } from "./api-format";
+import {
+    extractModelFromPair,
+    normalizeOpenAIRequest,
+    parseOpenAIResponse,
+    resolvePairApiFormat,
+} from "./openai-adapter";
 
 // Core interfaces for processed data
 export interface ProcessedPair {
@@ -23,6 +31,7 @@ export interface ProcessedPair {
     isStreaming: boolean;
     rawStreamData?: string; // Raw SSE/body_raw data for debugging
     streamFormat?: "standard" | "bedrock" | null; // Detected stream format
+    apiFormat?: ApiFormat;
 }
 
 // Extended message type with tool result pairing
@@ -40,6 +49,8 @@ export interface SimpleConversation {
     allPairs: ProcessedPair[];
     finalPair: ProcessedPair;
     compacted?: boolean;
+    /** Human-readable API format label, e.g. "OpenAI Chat". */
+    apiFormatDisplay?: string;
     metadata: {
         startTime: string;
         endTime: string;
@@ -71,33 +82,39 @@ export class SharedConversationProcessor {
             }
 
             try {
-                // Detect streaming
+                const apiFormat = resolvePairApiFormat(pair);
+                const isOpenAIFormat = apiFormat === "openai" || apiFormat === "openai-responses";
                 const isStreaming = !!pair.response.body_raw;
                 let response: Message;
                 let streamFormat: "standard" | "bedrock" | null = null;
+                let request: MessageCreateParams;
 
-                if (pair.response.body_raw) {
-                    // Parse streaming response and detect format
+                if (isOpenAIFormat) {
+                    request = normalizeOpenAIRequest(pair.request.body, apiFormat);
+                    response = parseOpenAIResponse(pair.response, apiFormat, extractModelFromPair(pair));
+                } else if (pair.response.body_raw) {
                     streamFormat = this.isBedrockResponse(pair.response.body_raw) ? "bedrock" : "standard";
                     response = this.parseStreamingResponse(pair.response.body_raw);
+                    request = pair.request.body as MessageCreateParams;
                 } else if (pair.response.body) {
                     response = pair.response.body as Message;
+                    request = pair.request.body as MessageCreateParams;
                 } else {
                     continue;
                 }
 
-                // Extract model from request headers or URL
                 const model = this.extractModel(pair);
 
                 processedPairs.push({
                     id: `${pair.request.timestamp || Date.now()}_${Math.random()}`,
                     timestamp: new Date((pair.request.timestamp || Date.now()) * 1000).toISOString(),
-                    request: pair.request.body as MessageCreateParams,
+                    request,
                     response,
                     model,
                     isStreaming,
                     rawStreamData: pair.response.body_raw,
                     streamFormat,
+                    apiFormat: apiFormat !== "unknown" ? apiFormat : undefined,
                 });
             } catch (error) {
                 console.warn(`Failed to process raw pair at index ${i}:`, error);
@@ -546,6 +563,9 @@ export class SharedConversationProcessor {
 
                 const modelsUsed = new Set(sortedThreadPairs.map((pair) => pair.model));
                 const enhancedMessages = this.processToolResults(finalPair.request.messages || []);
+                const apiFormatDisplay = formatApiFormatsDisplay(
+                    sortedThreadPairs.map((pair) => pair.apiFormat || "unknown"),
+                );
 
                 const conversation: SimpleConversation = {
                     id: this.hashString(conversationKey),
@@ -555,6 +575,7 @@ export class SharedConversationProcessor {
                     response: finalPair.response,
                     allPairs: sortedThreadPairs,
                     finalPair: finalPair,
+                    apiFormatDisplay,
                     metadata: {
                         startTime: sortedThreadPairs[0].timestamp,
                         endTime: finalPair.timestamp,
@@ -734,6 +755,9 @@ export class SharedConversationProcessor {
         const allModels = new Set([...originalConv.models, ...compactConv.models]);
         const startTime = allPairs[0].timestamp;
         const endTime = allPairs[allPairs.length - 1].timestamp;
+        const apiFormatDisplay = formatApiFormatsDisplay(
+            allPairs.map((pair) => pair.apiFormat || "unknown"),
+        );
 
         return {
             id: compactConv.id,
@@ -744,6 +768,7 @@ export class SharedConversationProcessor {
             allPairs: allPairs,
             finalPair: compactConv.finalPair,
             compacted: true,
+            apiFormatDisplay,
             metadata: {
                 startTime: startTime,
                 endTime: endTime,

@@ -3,12 +3,19 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import type { ApiFormat, ModelRoute, ProviderRoute, ToolProfile } from "./types";
+import { inferApiFormatFromNpm } from "../api-format";
 import { isNativeBinary } from "./binary-utils";
 import { log } from "../cli-common";
 
+interface OpenCodeModelConfig {
+	name?: string;
+	npm?: string;
+	[key: string]: unknown;
+}
+
 interface OpenCodeProviderConfig {
 	npm?: string;
-	models?: Record<string, { name?: string; [key: string]: unknown }>;
+	models?: Record<string, OpenCodeModelConfig>;
 	options?: {
 		baseURL?: string;
 		[key: string]: unknown;
@@ -122,41 +129,71 @@ function readOpenCodeConfig(): OpenCodeConfig {
 }
 
 function inferApiFormat(npm: string): ApiFormat {
-	if (npm.includes("anthropic")) {
-		return "anthropic";
+	return inferApiFormatFromNpm(npm);
+}
+
+function resolveProviderBaseUrl(providerId: string, provider: OpenCodeProviderConfig): string | null {
+	if (provider?.options?.baseURL) {
+		return provider.options.baseURL;
 	}
-	if (npm.includes("openai-compatible")) {
-		return "openai";
+	if (providerId === "anthropic") {
+		return process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
 	}
-	if (npm.includes("openai")) {
-		return "openai-responses";
+	if (providerId === "openai") {
+		return process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
 	}
-	return "unknown";
+	return null;
 }
 
 function buildModelRouteMap(config: OpenCodeConfig): Record<string, ModelRoute> {
 	const map: Record<string, ModelRoute> = {};
 
 	for (const [providerId, provider] of Object.entries(config.provider || {})) {
-		const baseURL = provider?.options?.baseURL;
+		const baseURL = resolveProviderBaseUrl(providerId, provider);
 		if (!baseURL) {
 			continue;
 		}
 
-		const npm = typeof provider.npm === "string" ? provider.npm : "";
-		const apiFormat = inferApiFormat(npm);
+		const providerNpm = typeof provider.npm === "string" ? provider.npm : "";
+		const modelIds = Object.keys(provider.models || {});
 
-		for (const modelId of Object.keys(provider.models || {})) {
+		if (modelIds.length === 0) {
+			const apiFormat = inferApiFormat(providerNpm);
+			const fallbackRoute: ModelRoute = {
+				providerId,
+				modelId: "*",
+				upstreamBaseUrl: baseURL,
+				npm: providerNpm,
+				apiFormat,
+				isProviderFallback: true,
+			};
+			map[`${providerId}/*`] = fallbackRoute;
+			continue;
+		}
+
+		for (const modelId of modelIds) {
+			const modelConfig = provider.models?.[modelId];
+			const modelNpm = typeof modelConfig?.npm === "string" ? modelConfig.npm : providerNpm;
 			const route: ModelRoute = {
 				providerId,
 				modelId,
 				upstreamBaseUrl: baseURL,
-				npm,
-				apiFormat,
+				npm: modelNpm,
+				apiFormat: inferApiFormat(modelNpm),
 			};
 			map[modelId] = route;
 			map[`${providerId}/${modelId}`] = route;
 		}
+
+		const providerFallback: ModelRoute = {
+			providerId,
+			modelId: "*",
+			upstreamBaseUrl: baseURL,
+			npm: providerNpm,
+			apiFormat: inferApiFormat(providerNpm),
+			isProviderFallback: true,
+		};
+		map[`${providerId}/*`] = providerFallback;
 	}
 
 	return map;
@@ -166,10 +203,7 @@ function listRoutesFromConfig(config: OpenCodeConfig): ProviderRoute[] {
 	const routes: ProviderRoute[] = [];
 
 	for (const [id, provider] of Object.entries(config.provider || {})) {
-		let baseURL = provider?.options?.baseURL;
-		if (!baseURL && id === "anthropic") {
-			baseURL = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
-		}
+		const baseURL = resolveProviderBaseUrl(id, provider);
 		if (baseURL) {
 			routes.push({ id, upstreamBaseUrl: baseURL });
 		}

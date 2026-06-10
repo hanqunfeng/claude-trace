@@ -3,8 +3,15 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import type { ToolProfile } from "./types";
+import {
+	getClaudeConfigOverlayDir,
+	isPersistentOverlayDir,
+	resolveUserClaudeConfigDir,
+	syncClaudeConfigOverlay,
+	writeOverlaySettings,
+} from "../claude-config-overlay";
 import { isNativeBinary, resolveToJsFile } from "./binary-utils";
-import { log } from "../cli-common";
+import { log, traceDebug } from "../cli-common";
 
 function findClaudePath(customPath?: string): string {
 	if (customPath) {
@@ -144,7 +151,7 @@ function getClaudeBinaryPath(customPath?: string): string {
 }
 
 function getClaudeConfigDir(): string {
-	return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+	return resolveUserClaudeConfigDir();
 }
 
 export const claudeProfile: ToolProfile = {
@@ -180,7 +187,8 @@ export const claudeProfile: ToolProfile = {
 	},
 
 	prepareSpawnEnv(proxyUrl: string): { tmpDir: string | null; spawnEnv: NodeJS.ProcessEnv } {
-		const settingsPath = path.join(getClaudeConfigDir(), "settings.json");
+		const sourceConfigDir = resolveUserClaudeConfigDir();
+		const settingsPath = path.join(sourceConfigDir, "settings.json");
 		let tmpDir: string | null = null;
 
 		const spawnEnv: NodeJS.ProcessEnv = {
@@ -195,15 +203,24 @@ export const claudeProfile: ToolProfile = {
 				};
 
 				if (settings.env?.ANTHROPIC_BASE_URL) {
-					tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-trace-"));
-					const { ANTHROPIC_BASE_URL: _removed, ...restEnv } = settings.env;
-					settings.env = restEnv;
-					fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(settings, null, 2));
-					spawnEnv.CLAUDE_CONFIG_DIR = tmpDir;
+					const overlayDir = getClaudeConfigOverlayDir();
+					const syncResult = syncClaudeConfigOverlay(sourceConfigDir, overlayDir, os.homedir());
+					writeOverlaySettings(settingsPath, overlayDir);
+					tmpDir = overlayDir;
+					spawnEnv.CLAUDE_CONFIG_DIR = overlayDir;
+
+					if (syncResult.skipped.length > 0) {
+						traceDebug(
+							`claude-trace: overlay linked ${syncResult.linked.length}, skipped ${syncResult.skipped.length} (proxy still active)`,
+						);
+						for (const skip of syncResult.skipped) {
+							traceDebug(`claude-trace: overlay skip ${skip.entry}: ${skip.reason}`);
+						}
+					}
 				}
 			} catch (error) {
 				const err = error as Error;
-				log(`Warning: could not prepare temp Claude config: ${err.message}`, "yellow");
+				log(`Warning: could not prepare Claude config overlay: ${err.message}`, "yellow");
 			}
 		}
 
@@ -211,7 +228,7 @@ export const claudeProfile: ToolProfile = {
 	},
 
 	cleanupTempConfig(tmpDir: string | null): void {
-		if (!tmpDir) {
+		if (!tmpDir || isPersistentOverlayDir(tmpDir)) {
 			return;
 		}
 

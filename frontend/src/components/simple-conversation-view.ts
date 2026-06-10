@@ -630,6 +630,14 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		return diffLines;
 	}
 
+	private formatMetadataLine(conversation: SimpleConversation): string {
+		const messageCount = `${conversation.messages.length + 1} messages`;
+		if (conversation.apiFormatDisplay) {
+			return `${messageCount} · ${conversation.apiFormatDisplay}`;
+		}
+		return messageCount;
+	}
+
 	private hasTools(conversation: SimpleConversation): boolean {
 		return !!(conversation.finalPair.request.tools && conversation.finalPair.request.tools.length > 0);
 	}
@@ -770,7 +778,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 												<div class="text-red-400">${Array.from(conversation.models).join(", ")}</div>
 												<div class="text-vs-muted">
 													${new Date(conversation.metadata.startTime).toLocaleString()}
-													<span class="ml-4">${conversation.messages.length + 1} messages</span>
+													<span class="ml-4">${this.formatMetadataLine(conversation)}</span>
 												</div>
 											</div>
 											${this.renderConversationContent(conversation)}
@@ -783,7 +791,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 											<div class="text-vs-assistant">${Array.from(conversation.models).join(", ")}</div>
 											<div class="text-vs-muted">
 												${new Date(conversation.metadata.startTime).toLocaleString()}
-												<span class="ml-4">${conversation.messages.length + 1} messages</span>
+												<span class="ml-4">${this.formatMetadataLine(conversation)}</span>
 											</div>
 										</div>
 										${this.renderConversationContent(conversation)}

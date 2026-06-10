@@ -15,6 +15,7 @@ export interface RawPair {
 		body?: any;
 		body_raw?: string;
 		events?: SSEEvent[];
+		api_format?: import("./tools/types").ApiFormat;
 	} | null; // null for orphaned requests
 	logged_at: string;
 	note?: string; // For orphaned requests

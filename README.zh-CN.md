@@ -4,14 +4,14 @@
 
 记录 **Claude Code** 与 **OpenCode** 的 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
 
-**[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制，并提供独立的 **[OpenCode](https://opencode.ai)** 命令。
+**[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制，并提供独立的 **[OpenCode](https://opencode.ai)** 命令，支持多 provider 拦截（Anthropic 与 OpenAI API 格式）。
 
 ## 支持的工具
 
 | 工具 | CLI 命令 | 日志目录 | 拦截方式 |
 |------|----------|----------|----------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
-| **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理（运行时 `OPENCODE_CONFIG_CONTENT` 覆盖） |
+| **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式 |
 
 两条命令共用同一套 HTML 报告界面、JSONL/JSON 导出，以及 `--index` 会话摘要功能。
 
@@ -112,7 +112,7 @@ Claude Code V2 以**原生二进制**分发（macOS Mach-O / Linux ELF / Windows
 3. 转发流量到真实上游（`~/.claude/settings.json` 或环境变量）
 4. 实时写入 `.claude-trace/`
 
-若 `~/.claude/settings.json` 已设置 `ANTHROPIC_BASE_URL`，会使用临时配置目录，**不会修改原始 settings 文件**。
+若 `~/.claude/settings.json` 已设置 `ANTHROPIC_BASE_URL`，会使用持久化配置 overlay（`~/.claude-trace/claude-config-overlay/`）：仅重写 `settings.json` 去掉该项，其余条目尽量通过符号链接指向原配置（Windows 目录用 junction，文件 symlink 失败则复制）。**单项链接失败不会阻断启动**，代理仍可用；跳过的条目仅在 `CLAUDE_TRACE_DEBUG=1` 时输出到 stderr。
 
 ### 第三方模型（CC-Switch 与自定义端点）
 
@@ -173,13 +173,13 @@ opencode-trace --index
 opencode-trace --help
 ```
 
-日志路径：当前目录 `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}`。
+日志路径：当前目录 `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}`。代理运行时错误追加写入 `.opencode-trace/proxy-errors.log`。
 
 ### 拦截原理
 
 OpenCode 为原生二进制。`opencode-trace` 启动本地反向代理，并通过 `OPENCODE_CONFIG_CONTENT` 注入运行时配置覆盖——**不会修改原始 `opencode.json`**。
 
-配置中所有自定义 provider 的 `baseURL` 均指向本地代理。代理从请求体读取 `model` 字段，映射到对应 provider 与真实上游 URL，再转发请求。
+配置中所有 provider 的 `baseURL` 均指向本地代理。代理从请求体读取 `model` 字段，映射到对应 provider 与真实上游 URL，再转发请求。支持 **Anthropic**（`/v1/messages`）与 **OpenAI** 格式（`/v1/chat/completions`、`/v1/responses`，即 `@ai-sdk/openai-compatible` 与 `@ai-sdk/openai`）。
 
 ```
 OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSeek、MiniMax 等）
@@ -192,6 +192,16 @@ OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSe
 3. `~/.config/opencode/opencode.json`
 4. 当前目录 `.opencode/opencode.json`
 
+### 支持的 API 格式
+
+| OpenCode `npm` 包 | API 格式 | 端点 | 对话视图标签 |
+|-------------------|----------|------|--------------|
+| `@ai-sdk/anthropic` | Anthropic Messages | `/v1/messages` | Anthropic Messages |
+| `@ai-sdk/openai-compatible` | OpenAI Chat Completions | `/v1/chat/completions` | OpenAI Chat |
+| `@ai-sdk/openai` | OpenAI Responses | `/v1/responses` | OpenAI Responses |
+
+代理从请求体读取 `model` 字段，路由到对应 provider 的 `baseURL`。同一 provider 下可通过 per-model `npm` 混用 chat 与 responses API。未在 `opencode.json` 中显式声明的模型，可通过 provider 级回退路由（`providerId/*`）匹配。
+
 ### CLI 选项
 
 | 参数 | 说明 |
@@ -203,21 +213,24 @@ OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSe
 | `--no-open` | 不自动打开 HTML |
 | `--run-with ARGS...` | 传递给 OpenCode 的参数 |
 
-### 调试模型路由
+### 调试
 
-默认情况下路由日志**静默输出**，避免污染 OpenCode TUI 输入框。
+默认情况下运行时日志**静默输出**，避免污染 OpenCode TUI 输入框。
 
-如需在 stderr 打印每次请求的路由详情（model → provider → 上游 URL）：
+| 输出内容 | 默认行为 | 设置 `OPENCODE_TRACE_DEBUG=1` 后 |
+|----------|----------|----------------------------------|
+| 每次请求路由（model → provider → 上游 URL） | 不输出 | 打印到 stderr |
+| 代理错误（如上游 TLS 连接失败） | 写入 `.opencode-trace/proxy-errors.log` | 同时打印到 stderr |
 
 ```bash
 OPENCODE_TRACE_DEBUG=1 opencode-trace
 ```
 
-当模型未正确路由、或日志缺少请求时，可使用此命令排查。
+当模型未正确路由、日志缺少请求，或上游连接失败时，可使用此命令排查。
 
 ### OpenCode 当前限制
 
-- **对话视图**对 Anthropic 格式 provider 完整支持（如 `@ai-sdk/anthropic` / DeepSeek Anthropic 端点）。OpenAI 兼容 provider（`@ai-sdk/openai-compatible`）会记录日志，但仅在 Raw/JSON 视图中展示。
+- **对话视图**支持 Anthropic 格式（`@ai-sdk/anthropic`）与 OpenAI 格式（`@ai-sdk/openai-compatible`、`@ai-sdk/openai`）provider；复杂字段（多模态、reasoning 等）可能仅在 Raw/JSON 视图中完整展示。
 - 尚未拦截未在 `opencode.json` 中定义的内置 `models.dev` provider。
 
 ---
@@ -236,6 +249,7 @@ OPENCODE_TRACE_DEBUG=1 opencode-trace
 - **Token 用量** — 含缓存命中的详细统计
 - **原始 JSONL 日志** — 完整请求/响应对
 - **交互式查看器** — 对话、原始 HTTP、JSON 调试等视图
+- **API 格式标签** — 每个会话头部显示请求格式（如 `8 messages · OpenAI Chat`）
 
 ### 会话索引
 
@@ -260,6 +274,7 @@ npm run setup    # 首次安装
 npm run dev      # watch 模式；预览 http://localhost:8080/test
 npm run build
 npm run typecheck
+npm run test:unit
 ```
 
 ### 架构
@@ -270,6 +285,9 @@ npm run typecheck
 - **Trace Runner**（`trace-runner.ts`）— 通用启动与代理/拦截器分发
 - **Tool Profiles**（`tools/claude.ts`、`tools/opencode.ts`）— 各工具配置、二进制检测、上游解析
 - **Reverse Proxy**（`reverse-proxy.ts`）— 原生二进制拦截，实时 HTML 生成
+- **Proxy Routing**（`proxy-routing.ts`）— 模型路由解析与上游路径规范化
+- **API Format**（`api-format.ts`）— 格式检测与展示标签
+- **OpenAI Adapter**（`openai-adapter.ts`）— OpenAI 请求/响应适配为 Anthropic `Message`，供查看器展示
 - **Interceptor**（`interceptor.ts`）+ **Loader**（`interceptor-loader.js`）— Claude Code V1
 - **HTML Generator**（`html-generator.ts`）、**Index Generator**（`index-generator.ts`）、**Shared Conversation Processor**（`shared-conversation-processor.ts`）
 

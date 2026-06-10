@@ -1,4 +1,6 @@
 import { spawn } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import { HTMLGenerator } from "./html-generator";
 
 export const colors = {
@@ -13,6 +15,31 @@ type ColorName = keyof typeof colors;
 
 export function log(message: string, color: ColorName = "reset"): void {
 	console.log(`${colors[color]}${message}${colors.reset}`);
+}
+
+export function isTraceDebugEnabled(): boolean {
+	const value = process.env.OPENCODE_TRACE_DEBUG;
+	return value === "1" || value === "true";
+}
+
+/** Write to stderr only when OPENCODE_TRACE_DEBUG is set — avoids polluting OpenCode TUI. */
+export function traceDebug(message: string): void {
+	if (isTraceDebugEnabled()) {
+		console.error(message);
+	}
+}
+
+/** Persist runtime proxy errors to log dir; stderr only in debug mode. */
+export function traceRuntimeError(message: string, logDirectory?: string): void {
+	const line = `[${new Date().toISOString()}] ${message}\n`;
+	if (logDirectory) {
+		try {
+			fs.appendFileSync(path.join(logDirectory, "proxy-errors.log"), line);
+		} catch {
+			// ignore file write failures
+		}
+	}
+	traceDebug(message);
 }
 
 export interface ParsedTraceArgs {

@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { ReverseProxyServer } from "./reverse-proxy";
 import type { ToolProfile, TraceOptions } from "./tools/types";
 import { isNativeBinary, resolveToJsFile } from "./tools/binary-utils";
+import { isPersistentOverlayDir } from "./claude-config-overlay";
 import { log } from "./cli-common";
 
 function getLoaderPath(): string {
@@ -92,7 +93,9 @@ async function runNativeWithProxy(
 	const { tmpDir, spawnEnv } = profile.prepareSpawnEnv(proxyInfo.url);
 	tmpConfigDir = tmpDir;
 
-	if (tmpConfigDir) {
+	if (tmpConfigDir && isPersistentOverlayDir(tmpConfigDir)) {
+		log(`Using ${profile.displayName} config overlay (original settings unchanged)`, "blue");
+	} else if (tmpConfigDir) {
 		log(`Using temporary ${profile.displayName} config (original config unchanged)`, "blue");
 	} else if (spawnEnv.OPENCODE_CONFIG_CONTENT) {
 		log(`Using OPENCODE_CONFIG_CONTENT runtime override (original config unchanged)`, "blue");

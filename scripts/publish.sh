@@ -58,7 +58,7 @@ resolve_github_repo() {
 	node -p "
 		const u = require('./package.json').repository?.url || '';
 		const m = u.match(/github\\.com[:\\/](.+?)\\.git\$/) || u.match(/github\\.com[:\\/](.+)\$/);
-		console.log(m ? m[1] : 'hanqunfeng/claude-trace');
+		m ? m[1] : 'hanqunfeng/claude-trace';
 	"
 }
 

@@ -32,11 +32,11 @@ Claude Code V2+ is a **native binary**, not Node.js. Do NOT launch it with `node
 3. **Native binary** → reverse proxy via `src/reverse-proxy.ts`
 4. **Node.js script** → original `interceptor-loader.js` + `spawn("node", ["--require", loader, jsPath, ...])`
 
-Proxy mode sets `ANTHROPIC_BASE_URL` to local proxy. If `~/.claude/settings.json` has its own `ANTHROPIC_BASE_URL`, a temp `CLAUDE_CONFIG_DIR` is created (original settings never modified).
+Proxy mode sets `ANTHROPIC_BASE_URL` to local proxy. If `~/.claude/settings.json` has its own `ANTHROPIC_BASE_URL`, `src/claude-config-overlay.ts` builds a persistent overlay at `~/.claude-trace/claude-config-overlay/` (symlinks/junctions + rewritten `settings.json`; original settings never modified).
 
-## OpenCode (Phase 1)
+## OpenCode
 
-OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config is read from `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, or `.opencode/opencode.json`. A temp config overrides `provider.anthropic.options.baseURL` only.
+OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config is read from `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, or `.opencode/opencode.json`. Runtime `OPENCODE_CONFIG_CONTENT` overrides all provider `baseURL` values. Model-based routing supports Anthropic (`@ai-sdk/anthropic`) and OpenAI (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) API formats via `src/openai-adapter.ts` and `src/proxy-routing.ts`.
 
 ## Directory Layout
 
@@ -58,6 +58,9 @@ src/
   html-generator.ts             # Self-contained HTML reports
   index-generator.ts            # Conversation index (accepts traceDir)
   shared-conversation-processor.ts  # Shared parsing (frontend + backend)
+  openai-adapter.ts             # OpenAI ↔ Anthropic format adapter
+  api-format.ts                 # API format detection helpers
+  proxy-routing.ts              # Model route resolution + path normalization
   types.ts                      # RawPair, ClaudeData interfaces
 frontend/
   src/                          # Lit + Tailwind viewer
@@ -81,7 +84,7 @@ node dist/opencode-cli.js  # run opencode-trace from source build
 
 ## Key Conventions
 
-- **Avoid `any`** — use types from `src/types.ts` and `@anthropic-ai/sdk/resources/messages`
+- **Avoid `any`** — use types from `src/types.ts` and `@anthropic-ai/sdk/resources/messages` (devDependency; `import type` only, not shipped to runtime)
 - **No self-referential npm dependency** — package does not depend on itself
 - **Package name:** `@hanqunfeng/claude-trace`, bin commands: `claude-trace`, `opencode-trace`
 - **Log directories:** `.claude-trace/` and `.opencode-trace/` in cwd (gitignored)
@@ -112,4 +115,4 @@ After changes: `npm run typecheck && npm run build`, then test with `node dist/c
 2. **Frontend not built** — HTML generator needs `frontend/dist/index.global.js`
 3. **Assuming Claude is Node.js** — V2+ Homebrew/Cask installs are native binaries
 4. **Editing only `dist/`** — always change `src/` and rebuild; `fix/` is reference only
-5. **OpenCode multi-provider** — Phase 1 only intercepts Anthropic provider; OpenAI/Gemini providers are not logged yet
+5. **OpenCode multi-provider** — Built-in `models.dev` providers not listed in `opencode.json` are not intercepted; configured OpenAI/Anthropic providers are supported

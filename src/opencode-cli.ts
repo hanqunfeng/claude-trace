@@ -72,8 +72,8 @@ ${colors.yellow}CONFIG:${colors.reset}
     3. ~/.config/opencode/opencode.json
     4. .opencode/opencode.json in current directory
 
-  Phase 1 intercepts the Anthropic provider via provider.anthropic.options.baseURL.
-  Your original config file is never modified — a temporary config is used at runtime.
+  Intercepts all configured providers (Anthropic + OpenAI formats) via runtime
+  OPENCODE_CONFIG_CONTENT override. Your original config file is never modified.
 
 ${colors.yellow}OUTPUT:${colors.reset}
   Logs are saved to: ${colors.green}.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,html}${colors.reset}

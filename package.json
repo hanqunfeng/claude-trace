@@ -19,6 +19,7 @@
 		"clean": "rm -rf dist",
 		"prepublishOnly": "npm run clean && npm run build",
 		"test": "node --require ./dist/interceptor.js echo 'test'",
+		"test:unit": "npx tsx --test test/*.test.ts",
 		"test:generate": "npx tsx src/cli test/test-traffic.jsonl test/index.html",
 		"typecheck": "tsc --noEmit",
 		"publish:check": "bash scripts/publish.sh --check",
@@ -55,14 +56,11 @@
 		"node": ">=16.0.0"
 	},
 	"devDependencies": {
+		"@anthropic-ai/sdk": "^0.52.0",
 		"@types/node": "^20.0.0",
 		"concurrently": "^9.1.2",
 		"nodemon": "^3.1.10",
 		"typescript": "^5.0.0"
-	},
-	"dependencies": {
-		"@anthropic-ai/claude-code": "^1.0.0",
-		"@anthropic-ai/sdk": "^0.52.0"
 	},
 	"directories": {
 		"test": "test"

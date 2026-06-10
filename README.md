@@ -4,14 +4,14 @@
 
 Record API traffic from **Claude Code** and **OpenCode** while you work. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
 
-**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support and a dedicated **[OpenCode](https://opencode.ai)** CLI.
+**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support and a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats).
 
 ## Supported tools
 
 | Tool | CLI command | Log directory | Interception |
 |------|-------------|---------------|--------------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
-| **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy via runtime config override (`OPENCODE_CONFIG_CONTENT`) |
+| **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
 
 Both commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
 
@@ -112,7 +112,7 @@ Flow:
 3. Forward traffic to the real upstream (`~/.claude/settings.json` or env)
 4. Log request/response pairs to `.claude-trace/` in real time
 
-If `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, a temporary config directory is used — the original file is never modified.
+If `~/.claude/settings.json` already sets `ANTHROPIC_BASE_URL`, a persistent config overlay is used (`~/.claude-trace/claude-config-overlay/`): only `settings.json` is rewritten without that key; other entries are symlinked back to your real config when possible (directory **junctions** on Windows; files fall back to copy). **A failed link for one entry does not block startup** — the proxy still works. Skipped entries are logged only when `CLAUDE_TRACE_DEBUG=1`.
 
 ### Third-party models (CC-Switch & custom endpoints)
 
@@ -173,13 +173,13 @@ opencode-trace --index
 opencode-trace --help
 ```
 
-Logs: `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory.
+Logs: `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory. Proxy runtime errors are appended to `.opencode-trace/proxy-errors.log`.
 
 ### How interception works
 
 OpenCode is a native binary. `opencode-trace` starts a local reverse proxy and injects a runtime config override via `OPENCODE_CONFIG_CONTENT` — **your original `opencode.json` is never modified**.
 
-For every custom provider in your config, all `baseURL` values point at the local proxy. The proxy reads the `model` field from each request body, maps it to the correct provider and real upstream URL, then forwards the request.
+For every provider in your config, all `baseURL` values point at the local proxy. The proxy reads the `model` field from each request body, maps it to the correct provider and real upstream URL, then forwards the request. Supports **Anthropic** (`/v1/messages`) and **OpenAI** formats (`/v1/chat/completions`, `/v1/responses` via `@ai-sdk/openai-compatible` and `@ai-sdk/openai`).
 
 ```
 OpenCode  →  opencode-trace proxy (logs)  →  provider baseURL (DeepSeek, MiniMax, etc.)
@@ -192,6 +192,16 @@ Config lookup order:
 3. `~/.config/opencode/opencode.json`
 4. `.opencode/opencode.json` in the current directory
 
+### Supported API formats
+
+| OpenCode `npm` package | API format | Endpoints | Conversation view label |
+|------------------------|------------|-----------|-------------------------|
+| `@ai-sdk/anthropic` | Anthropic Messages | `/v1/messages` | Anthropic Messages |
+| `@ai-sdk/openai-compatible` | OpenAI Chat Completions | `/v1/chat/completions` | OpenAI Chat |
+| `@ai-sdk/openai` | OpenAI Responses | `/v1/responses` | OpenAI Responses |
+
+The proxy reads `model` from each request body and routes to the matching provider `baseURL`. Per-model `npm` overrides are supported when a single provider mixes chat and responses APIs. Provider-level fallback (`providerId/*`) handles models not explicitly listed in `opencode.json`.
+
 ### CLI options
 
 | Flag | Description |
@@ -203,21 +213,24 @@ Config lookup order:
 | `--no-open` | Don't open generated HTML in browser |
 | `--run-with ARGS...` | Pass remaining arguments to OpenCode |
 
-### Debugging model routing
+### Debugging
 
-By default, routing logs are **silent** so they do not pollute OpenCode's TUI input area.
+By default, runtime logs are **silent** so they do not pollute OpenCode's TUI input area.
 
-To print per-request routing details to stderr (model → provider → upstream URL):
+| Output | Default | With `OPENCODE_TRACE_DEBUG=1` |
+|--------|---------|-------------------------------|
+| Per-request routing (model → provider → upstream) | Hidden | Printed to stderr |
+| Proxy errors (e.g. upstream TLS failure) | Written to `.opencode-trace/proxy-errors.log` | Also printed to stderr |
 
 ```bash
 OPENCODE_TRACE_DEBUG=1 opencode-trace
 ```
 
-Use this when a model is not routed correctly or requests are missing from the log.
+Use this when a model is not routed correctly, requests are missing from the log, or upstream connections fail.
 
 ### OpenCode limitations
 
-- **Conversation view** works fully for Anthropic-format providers (e.g. `@ai-sdk/anthropic` / DeepSeek Anthropic endpoint). OpenAI-compatible providers (`@ai-sdk/openai-compatible`) are logged but shown in Raw/JSON views only.
+- **Conversation view** supports Anthropic-format (`@ai-sdk/anthropic`) and OpenAI-format (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) providers; complex fields (multimodal, reasoning, etc.) may only appear fully in Raw/JSON views.
 - Built-in `models.dev` providers not defined in your `opencode.json` are not intercepted yet.
 
 ---
@@ -236,6 +249,7 @@ Each session produces a self-contained HTML file (embedded CSS/JS) you can open 
 - **Token usage** — detailed breakdown including cache hits
 - **Raw JSONL logs** — complete request/response pairs
 - **Interactive viewer** — conversation, raw HTTP, and JSON debug tabs
+- **API format label** — each conversation shows its request format (e.g. `8 messages · OpenAI Chat`) in the session header
 
 ### Conversation index
 
@@ -260,6 +274,7 @@ npm run setup    # first time
 npm run dev      # watch mode; preview at http://localhost:8080/test
 npm run build
 npm run typecheck
+npm run test:unit
 ```
 
 ### Architecture
@@ -270,6 +285,9 @@ npm run typecheck
 - **Trace Runner** (`trace-runner.ts`) — shared launch + proxy/interceptor dispatch
 - **Tool Profiles** (`tools/claude.ts`, `tools/opencode.ts`) — per-tool config, binary detection, upstream resolution
 - **Reverse Proxy** (`reverse-proxy.ts`) — native-binary interception, real-time HTML generation
+- **Proxy Routing** (`proxy-routing.ts`) — model route resolution and upstream path normalization
+- **API Format** (`api-format.ts`) — format detection and display labels
+- **OpenAI Adapter** (`openai-adapter.ts`) — OpenAI request/response → Anthropic `Message` for the viewer
 - **Interceptor** (`interceptor.ts`) + **Loader** (`interceptor-loader.js`) — Claude Code V1
 - **HTML Generator** (`html-generator.ts`), **Index Generator** (`index-generator.ts`), **Shared Conversation Processor** (`shared-conversation-processor.ts`)
 

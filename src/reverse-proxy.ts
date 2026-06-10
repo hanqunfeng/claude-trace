@@ -5,10 +5,19 @@ import * as fs from "fs";
 import * as path from "path";
 import * as zlib from "zlib";
 import { spawn } from "child_process";
+import { traceDebug, traceRuntimeError } from "./cli-common";
 import { HTMLGenerator } from "./html-generator";
 import { SharedConversationProcessor } from "./shared-conversation-processor";
+import {
+	buildOpenAIChatCompletionFromSSE,
+	buildOpenAIResponsesFromSSE,
+	parseOpenAIChatCompletionBody,
+	parseOpenAIResponsesBody,
+} from "./openai-adapter";
+import { inferApiFormatFromUrl } from "./api-format";
+import { normalizeUpstreamPath, resolveModelRoute, inferApiFormatFromPath } from "./proxy-routing";
 import type { RawPair, SSEEvent } from "./types";
-import type { ModelRoute } from "./tools/types";
+import type { ApiFormat, ModelRoute } from "./tools/types";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 
 export interface ReverseProxyConfig {
@@ -110,29 +119,6 @@ function extractModelFromBody(requestBody: string): string | null {
 	}
 }
 
-function resolveModelRoute(model: string, modelRoutes: Record<string, ModelRoute>): ModelRoute | null {
-	if (modelRoutes[model]) {
-		return modelRoutes[model];
-	}
-
-	const slashIndex = model.indexOf("/");
-	if (slashIndex > 0) {
-		const modelId = model.slice(slashIndex + 1);
-		if (modelRoutes[modelId]) {
-			return modelRoutes[modelId];
-		}
-	}
-
-	return null;
-}
-
-function normalizeUpstreamPath(urlPath: string, modelRoute?: ModelRoute): string {
-	if (modelRoute?.apiFormat === "anthropic" && (urlPath === "/messages" || urlPath.startsWith("/messages?"))) {
-		return urlPath.replace(/^\/messages/, "/v1/messages");
-	}
-	return urlPath;
-}
-
 function resolveModelTarget(
 	reqUrl: string | undefined,
 	requestBody: string,
@@ -146,22 +132,18 @@ function resolveModelTarget(
 
 	const modelRoute = resolveModelRoute(model, modelRoutes);
 	if (!modelRoute) {
-		if (process.env.OPENCODE_TRACE_DEBUG) {
-			console.error(`opencode-trace: unknown model "${model}", cannot route request`);
-		}
+		traceDebug(`opencode-trace: unknown model "${model}", cannot route request`);
 		return null;
 	}
 
 	const target = parseTargetBaseUrl(modelRoute.upstreamBaseUrl);
 	const [rawPath, query = ""] = (reqUrl || "/").split("?");
-	const urlPath = normalizeUpstreamPath(rawPath, modelRoute);
+	const urlPath = normalizeUpstreamPath(rawPath, modelRoute, target.pathPrefix);
 	const upstreamDisplayPath = `${target.pathPrefix}${urlPath}${query ? `?${query}` : ""}`;
 
-	if (process.env.OPENCODE_TRACE_DEBUG) {
-		console.error(
-			`opencode-trace: ${reqUrl || "/"} | model=${model} → provider=${modelRoute.providerId} (${modelRoute.apiFormat}) → ${modelRoute.upstreamBaseUrl}`,
-		);
-	}
+	traceDebug(
+		`opencode-trace: ${reqUrl || "/"} | model=${model} → provider=${modelRoute.providerId} (${modelRoute.apiFormat}) → ${modelRoute.upstreamBaseUrl}`,
+	);
 
 	return {
 		...target,
@@ -302,7 +284,7 @@ export class ReverseProxyServer {
 			fs.appendFileSync(this.logFile, jsonLine);
 			fs.writeFileSync(this.jsonFile, JSON.stringify(this.pairs, null, 2));
 		} catch (err) {
-			console.error(`Failed to write log: ${err}`);
+			traceRuntimeError(`Failed to write log: ${err}`, this.config.logDirectory);
 		}
 	}
 
@@ -314,7 +296,7 @@ export class ReverseProxyServer {
 				tool: this.tool,
 			});
 		} catch (err) {
-			console.error(`Failed to generate HTML: ${err}`);
+			traceRuntimeError(`Failed to generate HTML: ${err}`, this.config.logDirectory);
 		}
 	}
 
@@ -415,13 +397,17 @@ export class ReverseProxyServer {
 						responseChunks,
 						upstreamUrl,
 						modelTarget !== null,
+						modelTarget?.modelRoute,
 					);
 					res.end();
 				});
 			});
 
 			proxyReq.on("error", (err) => {
-				console.error(`Proxy request error: ${err.message}`);
+				traceRuntimeError(
+					`Proxy request error: ${err.message} (upstream: ${upstreamUrl})`,
+					this.config.logDirectory,
+				);
 				res.writeHead(502);
 				res.end(`Proxy error: ${err.message}`);
 			});
@@ -442,14 +428,13 @@ export class ReverseProxyServer {
 		responseChunks: Buffer[],
 		upstreamUrl: string,
 		modelRouted: boolean = false,
+		modelRoute?: ModelRoute,
 	): Promise<void> {
 		const shouldLog =
 			this.config.includeAllRequests || isLlmApiPath(req.url) || modelRouted;
 
 		if (!shouldLog) {
-			if (process.env.OPENCODE_TRACE_DEBUG) {
-				console.error(`opencode-trace: skipped logging for ${req.method} ${req.url}`);
-			}
+			traceDebug(`opencode-trace: skipped logging for ${req.method} ${req.url}`);
 			return;
 		}
 
@@ -479,7 +464,8 @@ export class ReverseProxyServer {
 			responseBody = rawBuffer.toString("utf-8");
 		}
 
-		const parsedResponseBody = this.parseResponseBody(proxyRes, responseBody);
+		const apiFormat = this.resolveResponseApiFormat(req.url, upstreamUrl, modelRoute);
+		const parsedResponseBody = this.parseResponseBody(proxyRes, responseBody, apiFormat, parsedRequestBody);
 		const pair: RawPair = {
 			request: {
 				timestamp: requestTimestamp / 1000,
@@ -492,6 +478,7 @@ export class ReverseProxyServer {
 				timestamp: responseTimestamp / 1000,
 				status_code: proxyRes.statusCode || 0,
 				headers: this.processHeaders(proxyRes.headers),
+				api_format: apiFormat !== "unknown" ? apiFormat : undefined,
 				...parsedResponseBody,
 			},
 			logged_at: new Date().toISOString(),
@@ -501,23 +488,70 @@ export class ReverseProxyServer {
 		this.writePairToLog(pair);
 		await this.generateHTML();
 		} catch (err) {
-			console.error(`opencode-trace: failed to log response: ${err}`);
+			traceRuntimeError(`opencode-trace: failed to log response: ${err}`, this.config.logDirectory);
 		}
+	}
+
+	private resolveResponseApiFormat(
+		reqUrl: string | undefined,
+		upstreamUrl: string,
+		modelRoute?: ModelRoute,
+	): ApiFormat {
+		if (modelRoute?.apiFormat && modelRoute.apiFormat !== "unknown") {
+			return modelRoute.apiFormat;
+		}
+		const fromReq = inferApiFormatFromPath(reqUrl);
+		if (fromReq !== "unknown") {
+			return fromReq;
+		}
+		return inferApiFormatFromUrl(upstreamUrl);
 	}
 
 	private parseResponseBody(
 		proxyRes: IncomingMessage,
 		responseBody: string,
+		apiFormat: ApiFormat,
+		requestBody: unknown,
 	): Pick<NonNullable<RawPair["response"]>, "body" | "body_raw" | "events"> {
 		const contentType = proxyRes.headers["content-type"] || "";
+		const model =
+			requestBody && typeof requestBody === "object" && "model" in requestBody
+				? String((requestBody as { model: unknown }).model)
+				: "unknown";
 
 		try {
 			if (contentType.includes("application/json")) {
-				return { body: JSON.parse(responseBody) as unknown };
+				const parsed = JSON.parse(responseBody) as unknown;
+				if (apiFormat === "openai" || ("choices" in (parsed as object))) {
+					return { body: parseOpenAIChatCompletionBody(parsed, model) };
+				}
+				if (apiFormat === "openai-responses" || ("output" in (parsed as object))) {
+					return { body: parseOpenAIResponsesBody(parsed, model) };
+				}
+				return { body: parsed };
 			}
 
 			if (contentType.includes("text/event-stream")) {
 				const events = this.parseSSEEvents(responseBody);
+
+				if (apiFormat === "openai") {
+					try {
+						const completion = buildOpenAIChatCompletionFromSSE(responseBody, model);
+						return { body: parseOpenAIChatCompletionBody(completion, model), events };
+					} catch {
+						return { body_raw: responseBody, events };
+					}
+				}
+
+				if (apiFormat === "openai-responses") {
+					try {
+						const responsesBody = buildOpenAIResponsesFromSSE(responseBody, model);
+						return { body: parseOpenAIResponsesBody(responsesBody, model), events };
+					} catch {
+						return { body_raw: responseBody, events };
+					}
+				}
+
 				const processor = new SharedConversationProcessor();
 				try {
 					const message: Message = processor.parseStreamingResponse(responseBody);

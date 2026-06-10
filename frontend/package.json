@@ -14,12 +14,12 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "^0.52.0",
 		"diff": "^8.0.2",
 		"lit": "^3.0.0",
 		"marked": "^12.0.0"
 	},
 	"devDependencies": {
+		"@anthropic-ai/sdk": "^0.52.0",
 		"@types/diff": "^7.0.2",
 		"autoprefixer": "^10.4.21",
 		"concurrently": "^9.1.2",

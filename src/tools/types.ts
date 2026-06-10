@@ -11,6 +11,8 @@ export interface ModelRoute {
 	upstreamBaseUrl: string;
 	npm: string;
 	apiFormat: ApiFormat;
+	/** True when this route matches any model under providerId (e.g. providerId/*). */
+	isProviderFallback?: boolean;
 }
 
 export interface ToolProfile {
