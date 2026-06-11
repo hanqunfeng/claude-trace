@@ -4,7 +4,7 @@
 
 Record API traffic from **Claude Code**, **OpenCode**, and **Codex CLI** while you work. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
 
-**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support and a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats).
+**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support, a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats), and **Codex CLI ChatGPT OAuth** tracing (login via ChatGPT account — the default Codex auth path for most users).
 
 ## Supported tools
 
@@ -12,7 +12,7 @@ Record API traffic from **Claude Code**, **OpenCode**, and **Codex CLI** while y
 |------|-------------|---------------|--------------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
-| **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; OpenAI Responses API |
+| **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; **ChatGPT OAuth** & OpenAI API Key (Responses API) |
 
 All commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
 
@@ -241,10 +241,12 @@ Use this when a model is not routed correctly, requests are missing from the log
 
 ## Codex CLI (`codex-trace`)
 
+**Primary auth mode: ChatGPT OAuth.** If you use Codex signed in with your ChatGPT account (the default for most installs), `codex-trace` fully supports tracing that path — multi-turn conversations, zstd-compressed requests, and SSE streaming responses appear correctly in HTML reports.
+
 ### Usage
 
 ```bash
-# Start Codex TUI with logging
+# Start Codex TUI with logging (ChatGPT OAuth or API Key)
 codex-trace
 
 # One-shot headless prompt
@@ -261,17 +263,38 @@ codex-trace --help
 
 Logs: `.codex-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory.
 
+### ChatGPT OAuth mode (recommended)
+
+Most users run Codex with **ChatGPT login** (`codex login` or the TUI sign-in flow). `codex-trace` reads `~/.codex/auth.json` and, when `auth_mode` is `"chatgpt"`, routes all LLM traffic to the ChatGPT OAuth upstream (`chatgpt.com/backend-api/codex`) — **even if `OPENAI_BASE_URL` is set in your shell** for other tools (Cursor, LiteLLM, etc.).
+
+| Check | Expected |
+|-------|----------|
+| Auth file | `~/.codex/auth.json` contains `"auth_mode": "chatgpt"` |
+| Session data | Symlinked from your real `$CODEX_HOME`; OAuth tokens are not rewritten |
+| HTML report | Multi-turn threads show each assistant reply, including the final turn |
+
+```
+Codex CLI (ChatGPT OAuth)  →  codex-trace proxy (logs)  →  chatgpt.com/backend-api/codex
+```
+
+**Tip:** Log in to Codex with ChatGPT *before* starting `codex-trace`. Switching auth inside Codex without restarting the trace session may require a fresh `codex-trace` run.
+
+### OpenAI API Key mode
+
+If you use Codex with an **OpenAI API Key** instead of ChatGPT login, traffic is routed via `openai_base_url` / `OPENAI_BASE_URL` / `api.openai.com` (or your custom gateway). Do not mix ChatGPT OAuth tokens with a custom `OPENAI_BASE_URL` gateway — use one auth mode at a time.
+
 ### How interception works
 
 Codex CLI is a native Rust binary. `codex-trace` starts a local reverse proxy and builds a config overlay at `~/.claude-trace/codex-config-overlay/` — **your original `~/.codex/config.toml` is never modified**.
 
-The overlay rewrites `openai_base_url`, `chatgpt_base_url`, and custom `model_providers.*.base_url` to point at the proxy. `auth.json` and session data are symlinked so ChatGPT OAuth continues to work. The proxy routes by request path:
+The overlay rewrites `openai_base_url`, `chatgpt_base_url`, and custom `model_providers.*.base_url` to point at the proxy. `auth.json` and session data are symlinked so ChatGPT OAuth continues to work. The proxy picks the upstream from **`auth.json` auth mode** (ChatGPT OAuth vs API Key) and request path:
 
-- `/v1/responses`, `/responses`, `/responses/compact` → OpenAI API Key or custom provider upstream
-- `/backend-api/codex/responses` → ChatGPT OAuth upstream
+- **ChatGPT OAuth** (`auth_mode: "chatgpt"`): `/responses`, `/v1/responses`, `/backend-api/codex/...` → `chatgpt.com`
+- **OpenAI API Key**: `/v1/responses`, `/responses` → `openai_base_url` / `OPENAI_BASE_URL` / default OpenAI host
+- **Custom `model_providers`**: non-reserved provider IDs with explicit `base_url`
 
 ```
-Codex CLI  →  codex-trace proxy (logs)  →  api.openai.com / chatgpt.com / custom provider
+Codex CLI  →  codex-trace proxy (logs)  →  chatgpt.com (OAuth) / api.openai.com / custom provider
 ```
 
 Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
@@ -290,7 +313,10 @@ Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
 ### Codex limitations
 
 - WebSocket Responses transport is disabled in the overlay (`supports_websockets = false`) so HTTP/SSE traffic can be logged.
-- Built-in provider IDs (`openai`, `ollama`, `lmstudio`) cannot be overridden via `model_providers`; interception uses `openai_base_url` / `chatgpt_base_url` instead.
+- Built-in provider IDs (`openai`, `ollama`, `lmstudio`) cannot be overridden via `model_providers`; ChatGPT OAuth uses `chatgpt_base_url`, API Key mode uses `openai_base_url`.
+- **Ollama / LM Studio** built-in providers are not intercepted (traffic bypasses the proxy).
+- Older `auth.json` files without `auth_mode` fall back to legacy heuristics; re-login with ChatGPT if OAuth routing misbehaves.
+- **Node.js:** Codex ChatGPT OAuth tracing works on **Node.js 16+** (the proxy forwards zstd request bodies unchanged). **Node.js 22+** is recommended so zstd-compressed request bodies are decompressed in logs and HTML; on Node 16–21, request entries show a placeholder instead of parsed JSON (responses and proxy behavior are unaffected).
 
 ---
 
@@ -324,7 +350,7 @@ Scans log files, summarizes meaningful conversations via Claude CLI, and generat
 
 ## Requirements
 
-- Node.js 16+
+- Node.js 16+ (Node.js 22+ recommended for full Codex OAuth request-body display in logs)
 - **Claude Code** CLI (V1 Node.js or V2+ native binary) for `claude-trace`
 - **OpenCode** CLI for `opencode-trace`
 - **Codex CLI** for `codex-trace`
@@ -343,15 +369,16 @@ npm run test:unit
 
 **Backend** (`src/`):
 
-- **CLI** (`cli.ts`, `opencode-cli.ts`, `codex-cli.ts`) — thin entry points
-- **Trace Runner** (`trace-runner.ts`) — shared launch + proxy/interceptor dispatch
-- **Tool Profiles** (`tools/claude.ts`, `tools/opencode.ts`, `tools/codex.ts`) — per-tool config, binary detection, upstream resolution
-- **Reverse Proxy** (`reverse-proxy.ts`) — native-binary interception, real-time HTML generation
-- **Proxy Routing** (`proxy-routing.ts`) — model route resolution and upstream path normalization
-- **API Format** (`api-format.ts`) — format detection and display labels
-- **OpenAI Adapter** (`openai-adapter.ts`) — OpenAI request/response → Anthropic `Message` for the viewer
-- **Interceptor** (`interceptor.ts`) + **Loader** (`interceptor-loader.js`) — Claude Code V1
-- **HTML Generator** (`html-generator.ts`), **Index Generator** (`index-generator.ts`), **Shared Conversation Processor** (`shared-conversation-processor.ts`)
+- **CLI** (`cli/cli.ts`, `cli/opencode-cli.ts`, `cli/codex-cli.ts`, `cli/cli-common.ts`) — thin entry points and shared arg parsing
+- **Trace Runner** (`cli/trace-runner.ts`) — shared launch + proxy/interceptor dispatch
+- **Tool Profiles** (`tools/claude.ts`, `tools/opencode.ts`, `tools/codex.ts`, `tools/binary-utils.ts`) — per-tool config, binary detection, upstream resolution
+- **Config Overlays** (`config/claude-config-overlay.ts`, `config/codex-config-overlay.ts`) — persistent proxy overlays without modifying user config
+- **Reverse Proxy** (`intercept/reverse-proxy.ts`) — native-binary interception, real-time HTML generation
+- **Interceptor** (`intercept/interceptor.ts`) + **Loader** (`intercept/interceptor-loader.js`, `intercept/token-extractor.js`) — Claude Code V1
+- **Routing** (`routing/proxy-routing.ts`, `routing/codex-routing.ts`) — OpenCode model routes and Codex path/auth upstream selection
+- **API Format** (`adapt/api-format.ts`) — format detection and display labels
+- **OpenAI Adapter** (`adapt/openai-adapter.ts`) — OpenAI request/response → Anthropic `Message` for the viewer
+- **Report** (`report/html-generator.ts`, `report/index-generator.ts`, `report/shared-conversation-processor.ts`) — HTML generation and shared conversation parsing
 
 **Frontend** (`frontend/src/`): Lit + Tailwind interactive viewer embedded into HTML reports.
 

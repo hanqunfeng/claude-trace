@@ -648,6 +648,9 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 		const type = record.type;
 		if (type === "response.output_text.delta" && typeof record.delta === "string") {
 			text += record.delta;
+		} else if (type === "response.output_text.done" && typeof record.text === "string") {
+			// Codex ChatGPT OAuth may include the full text only on the done event.
+			text = record.text;
 		} else if (type === "response.function_call_arguments.delta") {
 			const itemId = typeof record.item_id === "string" ? record.item_id : "default";
 			if (!functionCalls.has(itemId)) {
@@ -670,8 +673,22 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 				functionCalls.set(itemId, { ...item, arguments: item.arguments || "" });
 			}
 		} else if (type === "response.completed" && record.response) {
-			// Prefer the terminal snapshot when the provider sends it
-			return record.response as OpenAIResponsesBody;
+			const completed = record.response as OpenAIResponsesBody;
+			// Prefer the terminal snapshot when the provider sends populated output.
+			if (Array.isArray(completed.output) && completed.output.length > 0) {
+				return completed;
+			}
+			// Codex ChatGPT OAuth often sends response.completed with output: [] while
+			// streaming deltas/done events carry the assistant text — keep accumulating.
+			if (typeof completed.id === "string") {
+				result.id = completed.id;
+			}
+			if (typeof completed.model === "string") {
+				result.model = completed.model;
+			}
+			if (completed.usage && typeof completed.usage === "object") {
+				result.usage = { ...result.usage, ...(completed.usage as OpenAIResponsesBody["usage"]) };
+			}
 		}
 	}
 

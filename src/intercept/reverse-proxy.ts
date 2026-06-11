@@ -168,6 +168,105 @@ function resolveRouteTarget(
 	};
 }
 
+/** Node `zlib` with optional zstd support (Node 22+). */
+type ZlibWithZstd = typeof zlib & { zstdDecompressSync?: (buffer: Buffer) => Buffer };
+
+/**
+ * Returns the request `Content-Encoding` header normalized to lowercase.
+ *
+ * @param headers - Incoming HTTP headers from the client request.
+ */
+function getRequestContentEncoding(headers: IncomingHttpHeaders): string {
+	return (headers["content-encoding"] || "").toLowerCase();
+}
+
+/**
+ * Decompresses a request body buffer when Codex (or other clients) send compressed JSON.
+ *
+ * Supports zstd (Codex ChatGPT OAuth), gzip, br, and deflate. Returns the original
+ * buffer when encoding is absent or decompression is unavailable/fails.
+ *
+ * @param buffer - Raw request body bytes from the client.
+ * @param contentEncoding - Lowercase `Content-Encoding` header value.
+ */
+function decompressRequestBodyBuffer(buffer: Buffer, contentEncoding: string): Buffer {
+	if (!buffer.length || !contentEncoding) {
+		return buffer;
+	}
+
+	try {
+		if (contentEncoding === "zstd") {
+			const zstdDecompressSync = (zlib as ZlibWithZstd).zstdDecompressSync;
+			if (zstdDecompressSync) {
+				return zstdDecompressSync(buffer);
+			}
+			return buffer;
+		}
+		if (contentEncoding === "gzip") {
+			return zlib.gunzipSync(buffer);
+		}
+		if (contentEncoding === "br") {
+			return zlib.brotliDecompressSync(buffer);
+		}
+		if (contentEncoding === "deflate") {
+			return zlib.inflateSync(buffer);
+		}
+	} catch {
+		return buffer;
+	}
+
+	return buffer;
+}
+
+/**
+ * Decodes a request body for JSON parsing and logs.
+ *
+ * @param headers - Incoming HTTP headers (for `Content-Encoding`).
+ * @param buffer - Raw request body bytes.
+ * @returns UTF-8 text after decompression, or empty string when buffer is empty.
+ */
+function decodeRequestBodyText(headers: IncomingHttpHeaders, buffer: Buffer): string {
+	if (!buffer.length) {
+		return "";
+	}
+	const decoded = decompressRequestBodyBuffer(buffer, getRequestContentEncoding(headers));
+	return decoded.toString("utf-8");
+}
+
+/**
+ * Parses a request body for structured logging.
+ *
+ * Binary or compressed bodies are decompressed when possible; otherwise a short
+ * metadata placeholder is stored instead of corrupted binary text.
+ *
+ * @param headers - Incoming HTTP headers.
+ * @param buffer - Raw request body bytes.
+ */
+function parseRequestBodyForLog(headers: IncomingHttpHeaders, buffer: Buffer): unknown {
+	if (!buffer.length) {
+		return null;
+	}
+
+	const encoding = getRequestContentEncoding(headers);
+	const decoded = decompressRequestBodyBuffer(buffer, encoding);
+	if (encoding === "zstd" && decoded === buffer && !(zlib as ZlibWithZstd).zstdDecompressSync) {
+		return { _note: "zstd compressed request body", byteLength: buffer.length };
+	}
+
+	const text = decoded.toString("utf-8");
+	try {
+		return JSON.parse(text);
+	} catch {
+		if (encoding && decoded !== buffer) {
+			return text;
+		}
+		if (encoding) {
+			return { _note: `${encoding} compressed request body`, byteLength: buffer.length };
+		}
+		return text;
+	}
+}
+
 /**
  * Extracts the `model` field from a JSON request body.
  *
@@ -483,13 +582,16 @@ export class ReverseProxyServer {
 	 */
 	private handleRequest(req: IncomingMessage, res: ServerResponse): void {
 		const requestTimestamp = Date.now();
-		let requestBody = "";
+		const requestBodyChunks: Buffer[] = [];
 
 		req.on("data", (chunk: Buffer | string) => {
-			requestBody += chunk;
+			requestBodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 		});
 
 		req.on("end", () => {
+			const requestBodyBuffer = Buffer.concat(requestBodyChunks);
+			const requestBodyText = decodeRequestBodyText(req.headers, requestBodyBuffer);
+
 			const fallback = {
 				protocol: this.targetProtocol,
 				targetHost: this.targetHost,
@@ -499,7 +601,7 @@ export class ReverseProxyServer {
 
 			const modelTarget =
 				this.modelRoutes && Object.keys(this.modelRoutes).length > 0
-					? resolveModelTarget(req.url, requestBody, this.modelRoutes, fallback)
+					? resolveModelTarget(req.url, requestBodyText, this.modelRoutes, fallback)
 					: null;
 
 			// OpenCode requires every request to resolve to a known model when modelRoutes is set.
@@ -553,7 +655,7 @@ export class ReverseProxyServer {
 						proxyRes,
 						requestTimestamp,
 						responseTimestamp,
-						requestBody,
+						requestBodyBuffer,
 						responseChunks,
 						upstreamUrl,
 						modelTarget !== null,
@@ -572,8 +674,8 @@ export class ReverseProxyServer {
 				res.end(`Proxy error: ${err.message}`);
 			});
 
-			if (requestBody) {
-				proxyReq.write(requestBody);
+			if (requestBodyBuffer.length > 0) {
+				proxyReq.write(requestBodyBuffer);
 			}
 			proxyReq.end();
 		});
@@ -589,7 +691,7 @@ export class ReverseProxyServer {
 	 * @param proxyRes - Upstream response headers and status.
 	 * @param requestTimestamp - Client request start time in milliseconds.
 	 * @param responseTimestamp - Upstream response completion time in milliseconds.
-	 * @param requestBody - Buffered raw request body string.
+	 * @param requestBody - Buffered raw request body bytes.
 	 * @param responseChunks - Buffered raw response body chunks.
 	 * @param upstreamUrl - Fully resolved upstream URL for logging.
 	 * @param modelRouted - Whether model-based routing was used (forces logging).
@@ -600,7 +702,7 @@ export class ReverseProxyServer {
 		proxyRes: IncomingMessage,
 		requestTimestamp: number,
 		responseTimestamp: number,
-		requestBody: string,
+		requestBody: Buffer,
 		responseChunks: Buffer[],
 		upstreamUrl: string,
 		modelRouted: boolean = false,
@@ -615,12 +717,7 @@ export class ReverseProxyServer {
 		}
 
 		try {
-		let parsedRequestBody: unknown = null;
-		try {
-			parsedRequestBody = requestBody ? JSON.parse(requestBody) : null;
-		} catch {
-			parsedRequestBody = requestBody || null;
-		}
+		const parsedRequestBody = parseRequestBodyForLog(req.headers, requestBody);
 
 		const rawBuffer = Buffer.concat(responseChunks);
 		let responseBody: string;
@@ -721,6 +818,9 @@ export class ReverseProxyServer {
 		try {
 			if (contentType.includes("application/json")) {
 				const parsed = JSON.parse(responseBody) as unknown;
+				if (parsed && typeof parsed === "object" && "error" in parsed) {
+					return { body: parsed };
+				}
 				if (apiFormat === "openai" || ("choices" in (parsed as object))) {
 					return { body: parseOpenAIChatCompletionBody(parsed, model) };
 				}

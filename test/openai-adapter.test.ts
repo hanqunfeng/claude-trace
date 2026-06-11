@@ -23,9 +23,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	buildOpenAIChatCompletionFromSSE,
+	buildOpenAIResponsesFromSSE,
 	normalizeOpenAIChatRequest,
 	normalizeOpenAIResponsesRequest,
 	parseOpenAIChatCompletionBody,
+	parseOpenAIResponsesBody,
 } from "../src/adapt/openai-adapter";
 
 /**
@@ -155,6 +157,29 @@ describe("normalizeOpenAIResponsesRequest", () => {
 		const text = request.messages[0].content?.[0];
 		assert.equal((text as { text?: string })?.text, "hello");
 		assert.equal(request.tools?.[0]?.name, "exec_command");
+	});
+});
+
+/**
+ * Tests OpenAI Responses SSE reassembly for Codex ChatGPT OAuth streams.
+ */
+describe("buildOpenAIResponsesFromSSE", () => {
+	/**
+	 * Codex may emit response.completed with output: [] while text lives in deltas.
+	 */
+	it("keeps streamed text when completed snapshot has empty output", () => {
+		const sse = [
+			'data: {"type":"response.output_text.delta","delta":"Hello"}',
+			'data: {"type":"response.output_text.delta","delta":" world"}',
+			'data: {"type":"response.output_text.done","text":"Hello world"}',
+			'data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.5","output":[],"usage":{"input_tokens":1,"output_tokens":2}}}',
+			"data: [DONE]",
+		].join("\n");
+
+		const built = buildOpenAIResponsesFromSSE(sse, "gpt-5.5");
+		const message = parseOpenAIResponsesBody(built, "gpt-5.5");
+		const textBlock = message.content.find((block) => block.type === "text");
+		assert.equal((textBlock as { text?: string })?.text, "Hello world");
 	});
 });
 

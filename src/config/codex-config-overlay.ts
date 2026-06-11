@@ -39,6 +39,16 @@ export interface CodexConfig {
 	[key: string]: unknown;
 }
 
+/** Parsed shape of Codex `auth.json` fields used for proxy routing. */
+export interface CodexAuth {
+	/** Active auth mode when present (e.g. `"chatgpt"` for ChatGPT OAuth). */
+	auth_mode?: string;
+	/** OpenAI API key when using API-key auth; `null` under ChatGPT OAuth. */
+	OPENAI_API_KEY?: string | null;
+	/** Additional auth file keys preserved through parse round-trips. */
+	[key: string]: unknown;
+}
+
 /** A custom model provider entry within `model_providers`. */
 export interface CodexModelProvider {
 	/** Human-readable provider name. */
@@ -193,14 +203,56 @@ export function readCodexConfig(codexHome?: string): CodexConfig {
 }
 
 /**
+ * Reads and parses Codex `auth.json`, returning `null` when missing or invalid.
+ *
+ * @param codexHome - Codex home directory; defaults to {@link resolveUserCodexHome}.
+ */
+export function readCodexAuth(codexHome?: string): CodexAuth | null {
+	const home = codexHome || resolveUserCodexHome();
+	const authPath = path.join(home, "auth.json");
+	if (!fs.existsSync(authPath)) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(fs.readFileSync(authPath, "utf-8")) as CodexAuth;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Returns true when `auth.json` explicitly selects ChatGPT OAuth.
+ *
+ * Only checks the `auth_mode` field when it is present; older auth files
+ * without `auth_mode` fall through to {@link hasChatGptAuth} heuristics.
+ *
+ * @param codexHome - Codex home directory; defaults to {@link resolveUserCodexHome}.
+ */
+export function isChatGptAuthMode(codexHome?: string): boolean {
+	const auth = readCodexAuth(codexHome);
+	return auth?.auth_mode === "chatgpt";
+}
+
+/**
  * Detects whether the user has ChatGPT OAuth credentials (vs OpenAI API key auth).
  *
- * Used by routing logic to distinguish `/backend-api/codex/responses` (ChatGPT)
- * from `/v1/responses` (API key) upstream paths.
+ * Prefers an explicit `auth_mode: "chatgpt"` in `auth.json`. When `auth_mode` is
+ * absent, falls back to a legacy content heuristic for older Codex installs.
  *
  * @param codexHome - Codex home directory; defaults to {@link resolveUserCodexHome}.
  */
 export function hasChatGptAuth(codexHome?: string): boolean {
+	if (isChatGptAuthMode(codexHome)) {
+		return true;
+	}
+
+	const auth = readCodexAuth(codexHome);
+	if (auth && "auth_mode" in auth) {
+		// Explicit non-ChatGPT auth_mode — do not apply legacy heuristics.
+		return false;
+	}
+
 	const home = codexHome || resolveUserCodexHome();
 	const authPath = path.join(home, "auth.json");
 	if (!fs.existsSync(authPath)) {

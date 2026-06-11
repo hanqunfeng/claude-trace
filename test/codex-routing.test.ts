@@ -32,7 +32,7 @@ import {
 	buildCodexModelRouteMap,
 	type CodexConfig,
 } from "../src/tools/codex";
-import { readCodexConfig, syncCodexConfigOverlay } from "../src/config/codex-config-overlay";
+import { readCodexConfig, syncCodexConfigOverlay, isChatGptAuthMode } from "../src/config/codex-config-overlay";
 import { parse, stringify } from "smol-toml";
 
 /**
@@ -63,9 +63,12 @@ describe("listRoutesFromCodexConfig", () => {
 	 * `chatgpt_base_url` is set in config.
 	 */
 	it("includes chatgpt route when chatgpt_base_url is set", () => {
-		const routes = listRoutesFromCodexConfig({
-			chatgpt_base_url: "https://chatgpt.example.com/backend-api/codex",
-		});
+		const routes = listRoutesFromCodexConfig(
+			{
+				chatgpt_base_url: "https://chatgpt.example.com/backend-api/codex",
+			},
+			isolatedHome,
+		);
 		const chatgpt = routes.find((route) => route.id === "chatgpt");
 		assert.ok(chatgpt);
 		assert.equal(chatgpt?.upstreamBaseUrl, "https://chatgpt.example.com/backend-api/codex");
@@ -104,6 +107,39 @@ describe("listRoutesFromCodexConfig", () => {
 			},
 		});
 		assert.equal(routes.find((route) => route.id === "ollama"), undefined);
+	});
+
+	/**
+	 * When `auth.json` sets `auth_mode: "chatgpt"`, OpenAI routes must not be
+	 * registered even if `OPENAI_BASE_URL` is set for other tools in the shell.
+	 */
+	it("excludes openai route when auth_mode is chatgpt", () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-home-"));
+		fs.writeFileSync(
+			path.join(tmpHome, "auth.json"),
+			JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null }),
+		);
+
+		const previousBaseUrl = process.env.OPENAI_BASE_URL;
+		process.env.OPENAI_BASE_URL = "https://api.fe8.cn";
+
+		try {
+			const routes = listRoutesFromCodexConfig({}, tmpHome);
+			assert.equal(routes.find((route) => route.id === "openai"), undefined);
+			assert.ok(routes.find((route) => route.id === "chatgpt"));
+			assert.deepEqual(routes.find((route) => route.id === "chatgpt")?.matchPathPrefixes, [
+				"/backend-api/codex",
+				"/v1/responses",
+				"/responses",
+			]);
+		} finally {
+			if (previousBaseUrl === undefined) {
+				delete process.env.OPENAI_BASE_URL;
+			} else {
+				process.env.OPENAI_BASE_URL = previousBaseUrl;
+			}
+			fs.rmSync(tmpHome, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -195,6 +231,26 @@ describe("resolveCodexRouteTarget", () => {
 		assert.equal(target.targetHost, "chatgpt.com");
 		assert.equal(target.upstreamDisplayPath, "/backend-api/codex/responses");
 	});
+
+	/**
+	 * ChatGPT OAuth sessions may POST to `/responses` against the proxy base URL;
+	 * when only the ChatGPT route is registered, that path should still reach ChatGPT upstream.
+	 */
+	it("routes chatgpt /responses path when openai route is absent", () => {
+		const target = resolveCodexRouteTarget(
+			"/responses",
+			[
+				{
+					id: "chatgpt",
+					upstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
+					matchPathPrefixes: ["/backend-api/codex", "/v1/responses", "/responses"],
+				},
+			],
+			fallback,
+		);
+		assert.equal(target.targetHost, "chatgpt.com");
+		assert.equal(target.upstreamDisplayPath, "/backend-api/codex/responses");
+	});
 });
 
 /**
@@ -250,5 +306,27 @@ describe("readCodexConfig", () => {
 	it("returns empty config when file is missing", () => {
 		const missingHome = path.join(os.tmpdir(), "codex-missing-" + Date.now());
 		assert.deepEqual(readCodexConfig(missingHome), {});
+	});
+});
+
+/**
+ * Tests parsing `auth.json` auth_mode for ChatGPT OAuth vs API-key routing.
+ */
+describe("isChatGptAuthMode", () => {
+	it("returns true when auth_mode is chatgpt", () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-mode-"));
+		fs.writeFileSync(path.join(tmpHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt" }));
+		assert.equal(isChatGptAuthMode(tmpHome), true);
+		fs.rmSync(tmpHome, { recursive: true, force: true });
+	});
+
+	it("returns false when auth_mode is absent", () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-mode-"));
+		fs.writeFileSync(
+			path.join(tmpHome, "auth.json"),
+			JSON.stringify({ OPENAI_API_KEY: "sk-test", tokens: { chatgpt: true } }),
+		);
+		assert.equal(isChatGptAuthMode(tmpHome), false);
+		fs.rmSync(tmpHome, { recursive: true, force: true });
 	});
 });

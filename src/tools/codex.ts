@@ -32,6 +32,7 @@ import type { ModelRoute, ProviderRoute, ToolProfile } from "./types";
 import {
 	getCodexConfigOverlayDir,
 	hasChatGptAuth,
+	isChatGptAuthMode,
 	isPersistentCodexOverlayDir,
 	readCodexConfig,
 	resolveUserCodexHome,
@@ -151,17 +152,37 @@ function resolveChatGptBaseUrl(config: CodexConfig): string {
 }
 
 /**
+ * Path prefixes for the ChatGPT OAuth upstream.
+ *
+ * When `auth.json` sets `auth_mode: "chatgpt"`, Codex may POST to `/responses`
+ * against the proxy base URL; those requests must still reach ChatGPT OAuth upstream.
+ *
+ * @param codexHome - User's `$CODEX_HOME` directory for auth file detection.
+ */
+function chatGptPathPrefixes(codexHome: string): string[] {
+	if (isChatGptAuthMode(codexHome)) {
+		return [...CHATGPT_PATH_PREFIXES, ...OPENAI_PATH_PREFIXES];
+	}
+	return CHATGPT_PATH_PREFIXES;
+}
+
+/**
  * Determine whether the OpenAI API Key route should be included.
  *
  * Included when explicit config/env signals OpenAI usage, or when the active
  * `model_provider` is unset/openai, or when a custom provider has no own base URL.
- * Excluded when another built-in provider (e.g. `chatgpt`) is active and owns routing.
+ * Excluded when another built-in provider (e.g. `chatgpt`) is active and owns routing,
+ * or when `auth.json` explicitly selects ChatGPT OAuth (`auth_mode: "chatgpt"`).
  *
  * @param config - Parsed Codex TOML config.
- * @param _codexHome - User's `$CODEX_HOME` directory (reserved for future auth checks).
+ * @param codexHome - User's `$CODEX_HOME` directory for auth file detection.
  * @returns True if the OpenAI route should be registered.
  */
-function shouldIncludeOpenAiRoute(config: CodexConfig, _codexHome: string): boolean {
+function shouldIncludeOpenAiRoute(config: CodexConfig, codexHome: string): boolean {
+	if (isChatGptAuthMode(codexHome)) {
+		return false;
+	}
+
 	if (config.openai_base_url || process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL) {
 		return true;
 	}
@@ -266,7 +287,7 @@ export function listRoutesFromCodexConfig(config: CodexConfig, codexHome?: strin
 		routes.push({
 			id: "chatgpt",
 			upstreamBaseUrl: resolveChatGptBaseUrl(config),
-			matchPathPrefixes: CHATGPT_PATH_PREFIXES,
+			matchPathPrefixes: chatGptPathPrefixes(home),
 		});
 	}
 
