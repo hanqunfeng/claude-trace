@@ -15,6 +15,11 @@ export interface ProviderRoute {
 	upstreamBaseUrl: string;
 	/** Request path prefixes that select this route (Codex multi-upstream). */
 	matchPathPrefixes?: string[];
+	/**
+	 * When set, forward to this exact upstream path instead of concatenating
+	 * {@link upstreamBaseUrl} path prefix with the request path (Codex Apps MCP remapping).
+	 */
+	fixedUpstreamPath?: string;
 }
 
 /**

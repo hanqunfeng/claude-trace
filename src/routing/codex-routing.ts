@@ -4,6 +4,7 @@
  * Codex uses different upstream endpoints depending on auth mode:
  * - OpenAI API key → `/v1/responses`
  * - ChatGPT OAuth → `/backend-api/codex/responses`
+ * - ChatGPT Apps MCP (`codex_apps`) → `/backend-api/wham/apps`
  *
  * The trace proxy matches incoming request paths against configured
  * {@link ProviderRoute.matchPathPrefixes} and forwards to the appropriate upstream base URL.
@@ -97,6 +98,15 @@ export function resolveCodexRouteTarget(
 
 	const target = parseTargetBaseUrl(matched.upstreamBaseUrl);
 	const [rawPath, query = ""] = (reqUrl || "/").split("?");
+
+	if (matched.fixedUpstreamPath) {
+		const upstreamDisplayPath = `${matched.fixedUpstreamPath}${query ? `?${query}` : ""}`;
+		return {
+			...target,
+			upstreamDisplayPath,
+		};
+	}
+
 	// If the request path already starts with the target's path prefix, don't prepend again.
 	const upstreamPath =
 		target.pathPrefix && rawPath.startsWith(target.pathPrefix)

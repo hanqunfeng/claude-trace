@@ -141,6 +141,33 @@ describe("listRoutesFromCodexConfig", () => {
 			fs.rmSync(tmpHome, { recursive: true, force: true });
 		}
 	});
+
+	/**
+	 * ChatGPT OAuth should register a separate wham route for the built-in `codex_apps` MCP.
+	 */
+	it("includes chatgpt apps mcp routes when chatgpt auth is active", () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-home-"));
+		fs.writeFileSync(
+			path.join(tmpHome, "auth.json"),
+			JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null }),
+		);
+
+		try {
+			const routes = listRoutesFromCodexConfig({}, tmpHome);
+			const wham = routes.find((route) => route.id === "chatgpt-wham");
+			assert.ok(wham);
+			assert.equal(wham?.upstreamBaseUrl, "https://chatgpt.com");
+			assert.deepEqual(wham?.matchPathPrefixes, ["/backend-api/wham"]);
+
+			const appsMcp = routes.find((route) => route.id === "chatgpt-apps-mcp");
+			assert.ok(appsMcp);
+			assert.equal(appsMcp?.upstreamBaseUrl, "https://chatgpt.com");
+			assert.deepEqual(appsMcp?.matchPathPrefixes, ["/api/codex/apps"]);
+			assert.equal(appsMcp?.fixedUpstreamPath, "/backend-api/wham/apps");
+		} finally {
+			fs.rmSync(tmpHome, { recursive: true, force: true });
+		}
+	});
 });
 
 /**
@@ -250,6 +277,57 @@ describe("resolveCodexRouteTarget", () => {
 		);
 		assert.equal(target.targetHost, "chatgpt.com");
 		assert.equal(target.upstreamDisplayPath, "/backend-api/codex/responses");
+	});
+
+	/**
+	 * Built-in `codex_apps` MCP posts to `/backend-api/wham/apps` on the ChatGPT host.
+	 * The path must not be prefixed with `/backend-api/codex` when forwarded upstream.
+	 */
+	it("routes chatgpt wham/apps path to chatgpt site origin", () => {
+		const target = resolveCodexRouteTarget(
+			"/backend-api/wham/apps",
+			[
+				{
+					id: "chatgpt",
+					upstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
+					matchPathPrefixes: ["/backend-api/codex", "/v1/responses", "/responses"],
+				},
+				{
+					id: "chatgpt-wham",
+					upstreamBaseUrl: "https://chatgpt.com",
+					matchPathPrefixes: ["/backend-api/wham"],
+				},
+			],
+			fallback,
+		);
+		assert.equal(target.targetHost, "chatgpt.com");
+		assert.equal(target.upstreamDisplayPath, "/backend-api/wham/apps");
+	});
+
+	/**
+	 * When the overlay rewrites `chatgpt_base_url` to a bare proxy URL, Codex builds
+	 * MCP requests to `/api/codex/apps` — remap to the canonical wham upstream path.
+	 */
+	it("remaps proxy /api/codex/apps to chatgpt wham/apps upstream", () => {
+		const target = resolveCodexRouteTarget(
+			"/api/codex/apps",
+			[
+				{
+					id: "chatgpt",
+					upstreamBaseUrl: "https://chatgpt.com/backend-api/codex",
+					matchPathPrefixes: ["/backend-api/codex", "/v1/responses", "/responses"],
+				},
+				{
+					id: "chatgpt-apps-mcp",
+					upstreamBaseUrl: "https://chatgpt.com",
+					matchPathPrefixes: ["/api/codex/apps"],
+					fixedUpstreamPath: "/backend-api/wham/apps",
+				},
+			],
+			fallback,
+		);
+		assert.equal(target.targetHost, "chatgpt.com");
+		assert.equal(target.upstreamDisplayPath, "/backend-api/wham/apps");
 	});
 });
 

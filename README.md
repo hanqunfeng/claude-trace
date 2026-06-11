@@ -290,6 +290,7 @@ Codex CLI is a native Rust binary. `codex-trace` starts a local reverse proxy an
 The overlay rewrites `openai_base_url`, `chatgpt_base_url`, and custom `model_providers.*.base_url` to point at the proxy. `auth.json` and session data are symlinked so ChatGPT OAuth continues to work. The proxy picks the upstream from **`auth.json` auth mode** (ChatGPT OAuth vs API Key) and request path:
 
 - **ChatGPT OAuth** (`auth_mode: "chatgpt"`): `/responses`, `/v1/responses`, `/backend-api/codex/...` → `chatgpt.com`
+- **ChatGPT Apps MCP** (`codex_apps`): `/api/codex/apps` → `chatgpt.com/backend-api/wham/apps`; `/backend-api/wham/...` → `chatgpt.com` (site origin)
 - **OpenAI API Key**: `/v1/responses`, `/responses` → `openai_base_url` / `OPENAI_BASE_URL` / default OpenAI host
 - **Custom `model_providers`**: non-reserved provider IDs with explicit `base_url`
 

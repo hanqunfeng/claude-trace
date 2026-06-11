@@ -13,9 +13,10 @@
  * - **TOML config reading** — load `config.toml` from `$CODEX_HOME` (default
  *   `~/.codex/`) via `codex-config-overlay.ts`.
  * - **Path-based upstream routing** — register separate upstreams for OpenAI
- *   API Key auth (`/v1/responses`), ChatGPT OAuth (`/backend-api/codex`), and
- *   custom `model_providers.*.base_url` entries. Dispatch is handled in
- *   `codex-routing.ts` using `matchPathPrefixes` on each {@link ProviderRoute}.
+ *   API Key auth (`/v1/responses`), ChatGPT OAuth (`/backend-api/codex`), ChatGPT
+ *   Apps MCP (`/backend-api/wham`), and custom `model_providers.*.base_url` entries.
+ *   Dispatch is handled in `codex-routing.ts` using `matchPathPrefixes` on each
+ *   {@link ProviderRoute}.
  * - **Config overlay** — build a persistent `$CODEX_HOME` overlay at
  *   `~/.claude-trace/codex-config-overlay/` that rewrites `openai_base_url`,
  *   `chatgpt_base_url`, and custom provider URLs to the local proxy.
@@ -55,6 +56,15 @@ const RESPONSES_NPM = "@openai/codex-responses";
 const OPENAI_PATH_PREFIXES = ["/v1/responses", "/responses"];
 /** Request path prefixes routed to the ChatGPT OAuth upstream. */
 const CHATGPT_PATH_PREFIXES = ["/backend-api/codex"];
+/** Path prefix for ChatGPT Apps MCP (`codex_apps` → `/backend-api/wham/apps`). */
+const CHATGPT_WHAM_PATH_PREFIXES = ["/backend-api/wham"];
+/**
+ * Proxy path Codex builds when `chatgpt_base_url` is a bare local proxy URL
+ * (`http://127.0.0.1:PORT`) — see `codex_apps_mcp_url_for_base_url` in Codex source.
+ */
+const CHATGPT_APPS_MCP_PROXY_PATH_PREFIXES = ["/api/codex/apps"];
+/** Canonical upstream path for ChatGPT Apps MCP on chatgpt.com. */
+const CHATGPT_APPS_MCP_UPSTREAM_PATH = "/backend-api/wham/apps";
 
 /**
  * Locate the Codex CLI executable on PATH or in common install locations.
@@ -149,6 +159,19 @@ function resolveOpenAiBaseUrl(config: CodexConfig): string {
  */
 function resolveChatGptBaseUrl(config: CodexConfig): string {
 	return config.chatgpt_base_url || DEFAULT_CHATGPT_BASE_URL;
+}
+
+/**
+ * ChatGPT site origin (scheme + host only) for `/backend-api/*` paths outside `/backend-api/codex`.
+ *
+ * Used for `codex_apps` MCP (`/backend-api/wham/apps`) so requests are not prefixed with
+ * `/backend-api/codex` when forwarded upstream.
+ *
+ * @param config - Parsed Codex TOML config.
+ */
+function resolveChatGptSiteOrigin(config: CodexConfig): string {
+	const parsed = new URL(resolveChatGptBaseUrl(config));
+	return `${parsed.protocol}//${parsed.host}`;
 }
 
 /**
@@ -288,6 +311,17 @@ export function listRoutesFromCodexConfig(config: CodexConfig, codexHome?: strin
 			id: "chatgpt",
 			upstreamBaseUrl: resolveChatGptBaseUrl(config),
 			matchPathPrefixes: chatGptPathPrefixes(home),
+		});
+		routes.push({
+			id: "chatgpt-wham",
+			upstreamBaseUrl: resolveChatGptSiteOrigin(config),
+			matchPathPrefixes: CHATGPT_WHAM_PATH_PREFIXES,
+		});
+		routes.push({
+			id: "chatgpt-apps-mcp",
+			upstreamBaseUrl: resolveChatGptSiteOrigin(config),
+			matchPathPrefixes: CHATGPT_APPS_MCP_PROXY_PATH_PREFIXES,
+			fixedUpstreamPath: CHATGPT_APPS_MCP_UPSTREAM_PATH,
 		});
 	}
 
