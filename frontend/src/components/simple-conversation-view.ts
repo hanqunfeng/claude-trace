@@ -764,13 +764,62 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		return diffLines;
 	}
 
-	/** Builds the subtitle under each conversation header (message count + API format). */
-	private formatMetadataLine(conversation: SimpleConversation): string {
-		const messageCount = `${conversation.messages.length + 1} messages`;
-		if (conversation.apiFormatDisplay) {
-			return `${messageCount} · ${conversation.apiFormatDisplay}`;
+	/** Formats a token count for compact header display (e.g. 42k, 1.2M). */
+	private formatTokenCount(count: number): string {
+		if (count >= 1_000_000) {
+			const value = count / 1_000_000;
+			return `${Number.isInteger(value) ? value : value.toFixed(1).replace(/\.0$/, "")}M`;
 		}
-		return messageCount;
+		if (count >= 10_000) {
+			const value = count / 1000;
+			return `${Number.isInteger(value) ? value : value.toFixed(1).replace(/\.0$/, "")}k`;
+		}
+		return count.toLocaleString();
+	}
+
+	/** Builds the token usage segment for a conversation header, or null when no usage data. */
+	private formatTokenUsageLine(conversation: SimpleConversation): string | null {
+		const metadata = conversation.metadata;
+		const lastIn = metadata.lastTurnInputTokens ?? metadata.inputTokens ?? 0;
+		const sessionOut = metadata.sessionOutputTokens ?? metadata.outputTokens ?? 0;
+
+		if (lastIn === 0 && sessionOut === 0) {
+			return null;
+		}
+
+		const parts = [`↑${this.formatTokenCount(lastIn)} in`, `↓${this.formatTokenCount(sessionOut)} out`];
+
+		if (metadata.totalPairs > 1) {
+			parts.push(`${metadata.totalPairs} calls`);
+		}
+
+		const cacheRead = metadata.cacheReadTokens ?? 0;
+		if (cacheRead > 0) {
+			parts.push(`cache ${this.formatTokenCount(cacheRead)} read`);
+		}
+
+		const cacheWrite = metadata.cacheCreationTokens ?? 0;
+		if (cacheWrite > 0) {
+			parts.push(`cache ${this.formatTokenCount(cacheWrite)} write`);
+		}
+
+		return parts.join(" · ");
+	}
+
+	/** Builds the subtitle under each conversation header (message count + API format + tokens). */
+	private formatMetadataLine(conversation: SimpleConversation): string {
+		const parts = [`${conversation.messages.length + 1} messages`];
+
+		if (conversation.apiFormatDisplay) {
+			parts.push(conversation.apiFormatDisplay);
+		}
+
+		const tokenUsage = this.formatTokenUsageLine(conversation);
+		if (tokenUsage) {
+			parts.push(tokenUsage);
+		}
+
+		return parts.join(" · ");
 	}
 
 	/** Returns true when the final request included tool definitions. */

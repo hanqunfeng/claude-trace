@@ -56,6 +56,26 @@ export interface EnhancedMessageParam extends MessageParam {
     hide?: boolean;
 }
 
+/** Token usage fields aggregated from API pairs in a conversation thread. */
+export interface ConversationUsageMetadata {
+    /** Last request context size; alias of {@link lastTurnInputTokens}. */
+    inputTokens: number;
+    /** Sum of output tokens across all pairs; alias of {@link sessionOutputTokens}. */
+    outputTokens: number;
+    /** Alias of {@link sessionOutputTokens} (not input + output). */
+    totalTokens: number;
+    /** Context token count from the chronologically last API response. */
+    lastTurnInputTokens: number;
+    /** Output token count from the chronologically last API response. */
+    lastTurnOutputTokens: number;
+    /** Sum of `output_tokens` across every pair in the thread. */
+    sessionOutputTokens: number;
+    /** Prompt cache hits on the last turn, when reported by the API. */
+    cacheReadTokens?: number | null;
+    /** Prompt cache writes on the last turn, when reported by the API. */
+    cacheCreationTokens?: number | null;
+}
+
 /** One logical conversation thread merged from multiple API pairs. */
 export interface SimpleConversation {
     id: string;
@@ -75,9 +95,53 @@ export interface SimpleConversation {
         startTime: string;
         endTime: string;
         totalPairs: number;
-        inputTokens: number;
-        outputTokens: number;
-        totalTokens: number;
+    } & ConversationUsageMetadata;
+}
+
+/**
+ * Aggregates token usage from chronologically ordered API pairs.
+ *
+ * Input tokens reflect the last turn's context snapshot (not summed across turns).
+ * Output tokens are summed across all pairs as the session generation cost.
+ *
+ * @param pairs - Processed pairs belonging to one conversation thread.
+ */
+export function aggregateUsageFromPairs(pairs: ProcessedPair[]): ConversationUsageMetadata {
+    if (!pairs || pairs.length === 0) {
+        return {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            lastTurnInputTokens: 0,
+            lastTurnOutputTokens: 0,
+            sessionOutputTokens: 0,
+            cacheReadTokens: null,
+            cacheCreationTokens: null,
+        };
+    }
+
+    const sortedPairs = [...pairs].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    );
+    const lastPair = sortedPairs[sortedPairs.length - 1];
+    const lastUsage = lastPair.response?.usage;
+
+    const lastTurnInputTokens = lastUsage?.input_tokens ?? 0;
+    const lastTurnOutputTokens = lastUsage?.output_tokens ?? 0;
+    const sessionOutputTokens = sortedPairs.reduce(
+        (sum, pair) => sum + (pair.response?.usage?.output_tokens ?? 0),
+        0,
+    );
+
+    return {
+        inputTokens: lastTurnInputTokens,
+        outputTokens: sessionOutputTokens,
+        totalTokens: sessionOutputTokens,
+        lastTurnInputTokens,
+        lastTurnOutputTokens,
+        sessionOutputTokens,
+        cacheReadTokens: lastUsage?.cache_read_input_tokens ?? null,
+        cacheCreationTokens: lastUsage?.cache_creation_input_tokens ?? null,
     };
 }
 
@@ -585,6 +649,8 @@ export class SharedConversationProcessor {
                     sortedThreadPairs.map((pair) => pair.apiFormat || "unknown"),
                 );
 
+                const usage = aggregateUsageFromPairs(sortedThreadPairs);
+
                 const conversation: SimpleConversation = {
                     id: this.hashString(conversationKey),
                     models: modelsUsed,
@@ -598,10 +664,7 @@ export class SharedConversationProcessor {
                         startTime: sortedThreadPairs[0].timestamp,
                         endTime: finalPair.timestamp,
                         totalPairs: sortedThreadPairs.length,
-                        inputTokens: finalPair.response.usage?.input_tokens || 0,
-                        outputTokens: finalPair.response.usage?.output_tokens || 0,
-                        totalTokens:
-                            (finalPair.response.usage?.input_tokens || 0) + (finalPair.response.usage?.output_tokens || 0),
+                        ...usage,
                     },
                 };
 
@@ -773,6 +836,8 @@ export class SharedConversationProcessor {
             allPairs.map((pair) => pair.apiFormat || "unknown"),
         );
 
+        const usage = aggregateUsageFromPairs(allPairs);
+
         return {
             id: compactConv.id,
             models: allModels,
@@ -787,9 +852,7 @@ export class SharedConversationProcessor {
                 startTime: startTime,
                 endTime: endTime,
                 totalPairs: allPairs.length,
-                inputTokens: (originalConv.metadata.inputTokens || 0) + (compactConv.metadata.inputTokens || 0),
-                outputTokens: (originalConv.metadata.outputTokens || 0) + (compactConv.metadata.outputTokens || 0),
-                totalTokens: (originalConv.metadata.totalTokens || 0) + (compactConv.metadata.totalTokens || 0),
+                ...usage,
             },
         };
     }

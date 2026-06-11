@@ -96,7 +96,23 @@ export interface ProcessedConversation {
 		startTime: string;
 		endTime: string;
 		totalPairs: number;
+		/** Last request context size; alias of `lastTurnInputTokens`. */
+		inputTokens?: number;
+		/** Sum of output tokens across all pairs; alias of `sessionOutputTokens`. */
+		outputTokens?: number;
+		/** Alias of `sessionOutputTokens` (not input + output). */
 		totalTokens?: number;
+		/** Context token count from the chronologically last API response. */
+		lastTurnInputTokens?: number;
+		/** Output token count from the chronologically last API response. */
+		lastTurnOutputTokens?: number;
+		/** Sum of `output_tokens` across every pair in the thread. */
+		sessionOutputTokens?: number;
+		/** Prompt cache hits on the last turn, when reported by the API. */
+		cacheReadTokens?: number | null;
+		/** Prompt cache writes on the last turn, when reported by the API. */
+		cacheCreationTokens?: number | null;
+		/** @deprecated Use `inputTokens` / `lastTurnInputTokens` instead. */
 		tokenUsage?: {
 			input: number;
 			output: number;
