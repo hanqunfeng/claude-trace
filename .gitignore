@@ -47,3 +47,6 @@ coverage/
 .cache/
 .turbo/
 .parcel-cache/
+
+# CodeGraph
+.codegraph/

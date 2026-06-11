@@ -1,9 +1,16 @@
+/**
+ * @file Frontend entry point for the self-contained HTML trace viewer.
+ *
+ * Injects compiled Tailwind CSS, registers Lit child components, and mounts
+ * {@link ClaudeApp} onto the `#app` element embedded by `template.html`.
+ */
+
 import { ClaudeApp } from "./app";
 import "./components/simple-conversation-view";
 import "./components/raw-pairs-view";
 import "./components/json-view";
 
-// Inject CSS styles into the page
+// Injected at build time by tsup via the __CSS_CONTENT__ define
 declare const __CSS_CONTENT__: string;
 const css = __CSS_CONTENT__;
 if (css && css !== "__CSS_CONTENT__") {
@@ -19,6 +26,7 @@ if (document.readyState === "loading") {
 	initApp();
 }
 
+/** Creates and appends the root Lit application element. */
 function initApp() {
 	const app = new ClaudeApp();
 	const appElement = document.getElementById("app");

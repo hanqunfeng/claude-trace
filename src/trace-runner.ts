@@ -1,3 +1,14 @@
+/**
+ * @file trace-runner.ts
+ * @description Generic launch orchestrator for all Tool Profiles.
+ *
+ * Chooses interception strategy based on binary type:
+ * - **Native binary** (Claude V2+, OpenCode, Codex): local reverse proxy + env/config overlay
+ * - **Node.js script** (Claude V1): spawn with `--require interceptor-loader.js`
+ *
+ * Handles proxy lifecycle, signal forwarding, and temp config cleanup on exit.
+ */
+
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
@@ -9,6 +20,7 @@ import { isPersistentCodexOverlayDir } from "./codex-config-overlay";
 import type { ProviderRoute } from "./tools/types";
 import { log } from "./cli-common";
 
+/** Resolve path to interceptor-loader.js copied into dist/ at build time. */
 function getLoaderPath(): string {
 	const loaderPath = path.join(__dirname, "interceptor-loader.js");
 
@@ -20,6 +32,10 @@ function getLoaderPath(): string {
 	return loaderPath;
 }
 
+/**
+ * Launch a native CLI with ReverseProxyServer and tool-specific config overlay.
+ * Sets ANTHROPIC_BASE_URL / OPENCODE_CONFIG_CONTENT / CODEX_HOME as appropriate.
+ */
 async function runNativeWithProxy(
 	profile: ToolProfile,
 	binaryPath: string,
@@ -33,6 +49,7 @@ async function runNativeWithProxy(
 	const hasModelRoutes = Object.keys(modelRoutes).length > 0;
 	const upstreamBaseUrl =
 		providerRoutes.length > 0 ? providerRoutes[0].upstreamBaseUrl : profile.readUpstreamBaseUrl();
+	// Simple id→URL map when no per-model routing (legacy single-upstream mode)
 	const routes =
 		!hasModelRoutes && providerRoutes.length > 0
 			? Object.fromEntries(providerRoutes.map((route) => [route.id, route.upstreamBaseUrl]))
@@ -57,6 +74,7 @@ async function runNativeWithProxy(
 	}
 	console.log("");
 
+	// Codex needs path-prefix-aware provider routes for OpenAI vs ChatGPT OAuth upstreams
 	const codexProviderRoutes: ProviderRoute[] | undefined =
 		profile.name === "codex" && providerRoutes.length > 0 ? providerRoutes : undefined;
 
@@ -77,6 +95,7 @@ async function runNativeWithProxy(
 	let tmpConfigDir: string | null = null;
 	let shutdownCalled = false;
 
+	/** Idempotent teardown: stop proxy and remove ephemeral overlay dirs. */
 	const shutdown = (): void => {
 		if (shutdownCalled) {
 			return;
@@ -160,6 +179,10 @@ async function runNativeWithProxy(
 	shutdown();
 }
 
+/**
+ * Launch Claude Code V1 (Node.js) with fetch() interception via preloaded module.
+ * Environment variables configure logging behavior inside interceptor-loader.js.
+ */
 async function runNodeInterceptor(
 	profile: ToolProfile,
 	binaryPath: string,
@@ -223,6 +246,14 @@ async function runNodeInterceptor(
 	}
 }
 
+/**
+ * Main entry used by all three CLI binaries after argument parsing.
+ * Detects binary type and delegates to proxy or interceptor mode.
+ *
+ * @param profile - Tool-specific ToolProfile implementation
+ * @param toolArgs - Arguments forwarded to the underlying CLI (after --run-with)
+ * @param options - Logging and spawn options from CLI flags
+ */
 export async function runWithTracing(
 	profile: ToolProfile,
 	toolArgs: string[] = [],

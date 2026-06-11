@@ -1,3 +1,11 @@
+/**
+ * @file OpenAI ↔ Anthropic format adapter.
+ *
+ * Normalizes OpenAI Chat Completions and Responses API payloads into Anthropic
+ * `MessageCreateParams` / `Message` shapes so the shared conversation processor
+ * and HTML viewer can render all intercepted providers uniformly.
+ */
+
 import type {
 	ContentBlock,
 	Message,
@@ -11,6 +19,7 @@ import type { ApiFormat } from "./tools/types";
 import type { RawPair } from "./types";
 import { detectApiFormat, inferApiFormatFromUrl } from "./api-format";
 
+/** OpenAI chat message shape (request or completion choice). */
 interface OpenAIMessage {
 	role: string;
 	content?: string | null | Array<{ type: string; text?: string }>;
@@ -19,6 +28,7 @@ interface OpenAIMessage {
 	name?: string;
 }
 
+/** A single tool call emitted by OpenAI chat completions. */
 interface OpenAIToolCall {
 	id: string;
 	type: string;
@@ -28,6 +38,7 @@ interface OpenAIToolCall {
 	};
 }
 
+/** OpenAI function-tool definition in chat or responses requests. */
 interface OpenAITool {
 	type: string;
 	function: {
@@ -37,6 +48,7 @@ interface OpenAITool {
 	};
 }
 
+/** Parsed OpenAI chat completion response body. */
 interface OpenAIChatCompletion {
 	id?: string;
 	model?: string;
@@ -53,6 +65,7 @@ interface OpenAIChatCompletion {
 	};
 }
 
+/** One item in an OpenAI Responses API `input` array. */
 interface OpenAIResponsesInputItem {
 	type?: string;
 	role?: string;
@@ -65,6 +78,7 @@ interface OpenAIResponsesInputItem {
 	summary?: Array<{ type: string; text?: string }>;
 }
 
+/** One item in an OpenAI Responses API `output` array. */
 interface OpenAIResponsesOutputItem {
 	type: string;
 	id?: string;
@@ -75,6 +89,7 @@ interface OpenAIResponsesOutputItem {
 	content?: Array<{ type: string; text?: string }>;
 }
 
+/** Parsed OpenAI Responses API response body. */
 interface OpenAIResponsesBody {
 	id?: string;
 	model?: string;
@@ -86,6 +101,7 @@ interface OpenAIResponsesBody {
 	};
 }
 
+/** Returns a zeroed Anthropic-style usage object for synthesized messages. */
 function emptyUsage() {
 	return {
 		input_tokens: 0,
@@ -97,8 +113,12 @@ function emptyUsage() {
 	};
 }
 
+/** OpenAI/Responses content part types that map to Anthropic text blocks. */
 const TEXT_PART_TYPES = new Set(["text", "input_text", "output_text"]);
 
+/**
+ * Converts OpenAI message content (string or part array) to Anthropic text blocks.
+ */
 function toTextBlocks(content: OpenAIMessage["content"]): TextBlockParam[] {
 	if (content == null) {
 		return [];
@@ -111,6 +131,7 @@ function toTextBlocks(content: OpenAIMessage["content"]): TextBlockParam[] {
 		.map((part) => ({ type: "text" as const, text: part.text! }));
 }
 
+/** Tool definition as seen in Responses API (flat or nested under `function`). */
 interface ResponsesApiTool {
 	type?: string;
 	name?: string;
@@ -123,6 +144,9 @@ interface ResponsesApiTool {
 	};
 }
 
+/**
+ * Maps OpenAI/Responses tool definitions to Anthropic `tools` array entries.
+ */
 function mapOpenAITools(tools: ResponsesApiTool[] | OpenAITool[] | undefined): MessageCreateParams["tools"] {
 	if (!tools?.length) {
 		return undefined;
@@ -160,6 +184,12 @@ function mapOpenAITools(tools: ResponsesApiTool[] | OpenAITool[] | undefined): M
 	return mapped.length > 0 ? (mapped as MessageCreateParams["tools"]) : undefined;
 }
 
+/**
+ * Normalizes an OpenAI Chat Completions request body to Anthropic `MessageCreateParams`.
+ *
+ * @param body - Parsed JSON request body from the proxy log.
+ * @returns Anthropic-shaped params for the shared conversation processor.
+ */
 export function normalizeOpenAIChatRequest(body: unknown): MessageCreateParams {
 	const req = body as {
 		model?: string;
@@ -184,6 +214,7 @@ export function normalizeOpenAIChatRequest(body: unknown): MessageCreateParams {
 			continue;
 		}
 
+		// OpenAI `tool` role maps to Anthropic user message with tool_result blocks
 		if (msg.role === "tool") {
 			const toolContent =
 				typeof msg.content === "string"
@@ -243,6 +274,9 @@ export function normalizeOpenAIChatRequest(body: unknown): MessageCreateParams {
 	};
 }
 
+/**
+ * Converts one OpenAI Responses `input` item to Anthropic message content blocks.
+ */
 function responsesInputToContent(item: OpenAIResponsesInputItem): MessageParam["content"] {
 	if (item.type === "function_call") {
 		let parsedInput: Record<string, unknown> = {};
@@ -271,6 +305,7 @@ function responsesInputToContent(item: OpenAIResponsesInputItem): MessageParam["
 		];
 	}
 
+	// Codex reasoning items become Anthropic thinking blocks
 	if (item.type === "reasoning") {
 		const summaryText = (item.summary || [])
 			.map((part) => (part.type === "summary_text" ? part.text || "" : ""))
@@ -288,6 +323,9 @@ function responsesInputToContent(item: OpenAIResponsesInputItem): MessageParam["
 	return toTextBlocks(item.content as OpenAIMessage["content"]);
 }
 
+/**
+ * Normalizes an OpenAI Responses API request body to Anthropic `MessageCreateParams`.
+ */
 export function normalizeOpenAIResponsesRequest(body: unknown): MessageCreateParams {
 	const req = body as {
 		model?: string;
@@ -329,6 +367,7 @@ export function normalizeOpenAIResponsesRequest(body: unknown): MessageCreatePar
 	};
 }
 
+/** Converts a single OpenAI assistant message to an Anthropic `Message`. */
 function openAIMessageToAnthropic(message: OpenAIMessage, model: string): Message {
 	const content: ContentBlock[] = [];
 	const textBlocks = toTextBlocks(message.content);
@@ -365,6 +404,9 @@ function openAIMessageToAnthropic(message: OpenAIMessage, model: string): Messag
 	};
 }
 
+/**
+ * Parses a non-streaming OpenAI Chat Completions JSON body into an Anthropic `Message`.
+ */
 export function parseOpenAIChatCompletionBody(body: unknown, model = "unknown"): Message {
 	const completion = body as OpenAIChatCompletion;
 	const choiceMessage = completion.choices?.[0]?.message;
@@ -397,6 +439,7 @@ export function parseOpenAIChatCompletionBody(body: unknown, model = "unknown"):
 	return message;
 }
 
+/** Maps one OpenAI Responses output item to Anthropic content blocks. */
 function parseResponsesOutputItem(item: OpenAIResponsesOutputItem): ContentBlock[] {
 	const blocks: ContentBlock[] = [];
 
@@ -437,6 +480,9 @@ function parseResponsesOutputItem(item: OpenAIResponsesOutputItem): ContentBlock
 	return blocks;
 }
 
+/**
+ * Parses a non-streaming OpenAI Responses API JSON body into an Anthropic `Message`.
+ */
 export function parseOpenAIResponsesBody(body: unknown, model = "unknown"): Message {
 	const response = body as OpenAIResponsesBody;
 	const content: ContentBlock[] = [];
@@ -466,6 +512,9 @@ export function parseOpenAIResponsesBody(body: unknown, model = "unknown"): Mess
 	};
 }
 
+/**
+ * Extracts JSON payloads from SSE `data:` lines in a raw response body.
+ */
 function parseSSEDataLines(bodyRaw: string): unknown[] {
 	const chunks: unknown[] = [];
 	const lines = bodyRaw.split("\n");
@@ -481,13 +530,16 @@ function parseSSEDataLines(bodyRaw: string): unknown[] {
 		try {
 			chunks.push(JSON.parse(data));
 		} catch {
-			// skip
+			// skip malformed lines
 		}
 	}
 
 	return chunks;
 }
 
+/**
+ * Reconstructs a complete OpenAI Chat Completion object from streamed SSE chunks.
+ */
 export function buildOpenAIChatCompletionFromSSE(bodyRaw: string, model = "unknown"): OpenAIChatCompletion {
 	const chunks = parseSSEDataLines(bodyRaw) as OpenAIChatCompletion[];
 	const result: OpenAIChatCompletion = {
@@ -497,6 +549,7 @@ export function buildOpenAIChatCompletionFromSSE(bodyRaw: string, model = "unkno
 		usage: {},
 	};
 
+	// Tool calls may arrive in multiple delta chunks keyed by index
 	const toolCalls = new Map<number, OpenAIToolCall>();
 	let content = "";
 
@@ -564,6 +617,10 @@ export function buildOpenAIChatCompletionFromSSE(bodyRaw: string, model = "unkno
 	return result;
 }
 
+/**
+ * Reconstructs an OpenAI Responses body from streamed SSE events.
+ * Returns early when a `response.completed` event carries the full response.
+ */
 export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"): OpenAIResponsesBody {
 	const chunks = parseSSEDataLines(bodyRaw);
 	const result: OpenAIResponsesBody = {
@@ -613,6 +670,7 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 				functionCalls.set(itemId, { ...item, arguments: item.arguments || "" });
 			}
 		} else if (type === "response.completed" && record.response) {
+			// Prefer the terminal snapshot when the provider sends it
 			return record.response as OpenAIResponsesBody;
 		}
 	}
@@ -631,6 +689,10 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 	return result;
 }
 
+/**
+ * Parses a logged response (JSON body or SSE raw) into an Anthropic `Message`.
+ * Dispatches on detected API format and whether the body is already Anthropic-shaped.
+ */
 export function parseOpenAIResponse(
 	pairResponse: NonNullable<RawPair["response"]>,
 	apiFormat: ApiFormat,
@@ -638,6 +700,7 @@ export function parseOpenAIResponse(
 ): Message {
 	if (pairResponse.body && typeof pairResponse.body === "object") {
 		const body = pairResponse.body as Record<string, unknown>;
+		// Already normalized to Anthropic shape (e.g. by proxy)
 		if ("role" in body && "content" in body && Array.isArray(body.content)) {
 			return body as unknown as Message;
 		}
@@ -661,6 +724,10 @@ export function parseOpenAIResponse(
 	throw new Error("No OpenAI response body available");
 }
 
+/**
+ * Normalizes an OpenAI request body to Anthropic `MessageCreateParams`
+ * based on the detected API format.
+ */
 export function normalizeOpenAIRequest(body: unknown, apiFormat: ApiFormat): MessageCreateParams {
 	if (apiFormat === "openai-responses") {
 		return normalizeOpenAIResponsesRequest(body);
@@ -668,6 +735,9 @@ export function normalizeOpenAIRequest(body: unknown, apiFormat: ApiFormat): Mes
 	return normalizeOpenAIChatRequest(body);
 }
 
+/**
+ * Resolves the API format for a raw pair, preferring the value stamped at log time.
+ */
 export function resolvePairApiFormat(pair: RawPair): ApiFormat {
 	const fromResponse = pair.response?.api_format;
 	if (fromResponse && fromResponse !== "unknown") {
@@ -676,6 +746,7 @@ export function resolvePairApiFormat(pair: RawPair): ApiFormat {
 	return detectApiFormat(pair);
 }
 
+/** Extracts the model id string from a raw pair's request body. */
 export function extractModelFromPair(pair: RawPair): string {
 	const body = pair.request?.body;
 	if (body && typeof body === "object" && "model" in body && typeof (body as { model: unknown }).model === "string") {

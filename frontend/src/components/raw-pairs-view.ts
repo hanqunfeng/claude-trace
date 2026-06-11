@@ -1,16 +1,25 @@
+/**
+ * @file Raw API pair debug view.
+ *
+ * Shows unprocessed request/response objects exactly as logged, including
+ * optional SSE event arrays, with collapsible sections per pair.
+ */
+
 import { LitElement, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { RawPair } from "../../../src/types";
 
+/** Expandable dump of logged {@link RawPair} objects before normalization. */
 @customElement("raw-pairs-view")
 export class RawPairsView extends LitElement {
 	@property({ type: Array }) rawPairs: RawPair[] = [];
 
-	// Disable shadow DOM to use global Tailwind styles
+	/** Light DOM so global Tailwind classes apply. */
 	createRenderRoot() {
 		return this;
 	}
 
+	/** Renders collapsible raw request/response/SSE sections for each logged pair. */
 	render() {
 		if (this.rawPairs.length === 0) {
 			return html`<div class="text-vs-muted">No raw pairs found.</div>`;
@@ -97,6 +106,7 @@ ${this.formatJson(pair.response!.events)}</pre
 		`;
 	}
 
+	/** Returns URL pathname for display, falling back to the raw string on parse errors. */
 	private getUrlPath(url: string): string {
 		try {
 			return new URL(url).pathname;
@@ -105,6 +115,9 @@ ${this.formatJson(pair.response!.events)}</pre
 		}
 	}
 
+	/**
+	 * Extracts a display model name from the request URL (Bedrock) or body.
+	 */
 	private getModelName(pair: RawPair): string {
 		// Try to extract from Bedrock URL first
 		if (pair.request.url && pair.request.url.includes("bedrock-runtime")) {
@@ -123,6 +136,7 @@ ${this.formatJson(pair.response!.events)}</pre
 		return "unknown";
 	}
 
+	/** Strips Bedrock provider prefix for shorter display names. */
 	private normalizeModelName(modelName: string): string {
 		if (!modelName) return "unknown";
 
@@ -139,6 +153,7 @@ ${this.formatJson(pair.response!.events)}</pre
 		return modelName;
 	}
 
+	/** Pretty-prints an object for the `<pre>` block. */
 	private formatJson(obj: any): string {
 		try {
 			return JSON.stringify(obj, null, 2);
@@ -147,6 +162,7 @@ ${this.formatJson(pair.response!.events)}</pre
 		}
 	}
 
+	/** Toggles the collapsible section immediately following the clicked header. */
 	private toggleContent(e: Event) {
 		const header = e.currentTarget as HTMLElement;
 		const content = header.nextElementSibling as HTMLElement;

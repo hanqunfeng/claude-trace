@@ -1,5 +1,26 @@
 #!/usr/bin/env node
 
+/**
+ * @file opencode-cli.ts
+ * @description Entry point for the `opencode-trace` command.
+ *
+ * Thin CLI wrapper that parses arguments, dispatches to utility modes
+ * (HTML generation, index building), or delegates interactive tracing to
+ * `trace-runner.ts` via the OpenCode tool profile.
+ *
+ * Architecture:
+ * ```
+ * opencode-cli.ts → opencodeProfile (tools/opencode.ts) → trace-runner.ts
+ *                                                           └─ reverse-proxy.ts (always)
+ * ```
+ *
+ * OpenCode always uses reverse-proxy interception; config is injected at
+ * runtime via `OPENCODE_CONFIG_CONTENT` without modifying user files.
+ * There is no `--extract-token` mode (Claude-only feature).
+ *
+ * Registered as the `opencode-trace` bin in package.json.
+ */
+
 import { opencodeProfile } from "./tools/opencode";
 import { runWithTracing } from "./trace-runner";
 import {
@@ -11,6 +32,12 @@ import {
 	generateIndex,
 } from "./cli-common";
 
+/**
+ * Print usage help for all `opencode-trace` modes and options to stdout.
+ *
+ * Includes OpenCode-specific config discovery order and the note that
+ * original `opencode.json` files are never modified.
+ */
 function showHelp(): void {
 	console.log(`
 ${colors.blue}OpenCode Trace${colors.reset}
@@ -83,6 +110,17 @@ For more information, visit: https://github.com/hanqunfeng/claude-trace
 `);
 }
 
+/**
+ * Main CLI dispatcher.
+ *
+ * Modes are mutually exclusive and checked in priority order:
+ * 1. `--help` / `-h` — print usage and exit
+ * 2. `--generate-html` — offline HTML report from an existing JSONL log
+ * 3. `--index` — rebuild conversation summaries in `.opencode-trace/`
+ * 4. Default — launch OpenCode with live traffic tracing via `runWithTracing`
+ *
+ * Arguments after `--run-with` are passed verbatim to the OpenCode child process.
+ */
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	const { traceArgs, toolArgs, includeAllRequests, openInBrowser, logSensitiveHeaders, logBaseName } =
@@ -93,6 +131,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	}
 
+	// `--opencode-path` takes the next positional arg as the binary location.
 	let customOpenCodePath: string | undefined;
 	const opencodePathIndex = traceArgs.indexOf("--opencode-path");
 	if (opencodePathIndex !== -1 && traceArgs[opencodePathIndex + 1]) {
@@ -117,6 +156,7 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// Default mode: start reverse proxy + spawn OpenCode with logging.
 	await runWithTracing(opencodeProfile, toolArgs, {
 		includeAllRequests,
 		openInBrowser,

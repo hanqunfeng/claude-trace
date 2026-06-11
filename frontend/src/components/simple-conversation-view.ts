@@ -1,3 +1,10 @@
+/**
+ * @file Human-readable conversation renderer.
+ *
+ * Displays merged conversation threads with markdown formatting, tool call
+ * previews, diffs, collapsible system prompts, and Codex-specific context tags.
+ */
+
 import { LitElement, html, TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -13,15 +20,20 @@ import type {
 import { SimpleConversation, EnhancedMessageParam } from "../../../src/shared-conversation-processor";
 import { markdownToHtml } from "../utils/markdown";
 
+/** Renders {@link SimpleConversation} threads in the main conversations tab. */
 @customElement("simple-conversation-view")
 export class SimpleConversationView extends LitElement {
 	@property({ type: Array }) conversations: SimpleConversation[] = [];
 
-	// Disable shadow DOM to use global CSS
+	/** Light DOM so global Tailwind classes apply. */
 	createRenderRoot() {
 		return this;
 	}
 
+	/**
+	 * Generic click handler for collapsible sections.
+	 * Supports standard content toggle, Write-tool preview swap, or custom logic.
+	 */
 	private handleToggle(
 		e: Event,
 		options: {
@@ -71,14 +83,17 @@ export class SimpleConversationView extends LitElement {
 		}
 	}
 
+	/** Delegates to {@link handleToggle} with default content-toggle behavior. */
 	private toggleContent(e: Event) {
 		this.handleToggle(e);
 	}
 
+	/** Swaps Write-tool preview vs full content panels. */
 	private toggleWriteContent(e: Event) {
 		this.handleToggle(e, { type: "write" });
 	}
 
+	/** Renders an expandable "Thinking" block with markdown formatting. */
 	private renderThinkingBlock(thinking: string): TemplateResult {
 		const content = thinking.trim();
 		if (!content) {
@@ -95,6 +110,11 @@ export class SimpleConversationView extends LitElement {
 		);
 	}
 
+	/**
+	 * Renders message content blocks — text, thinking, and tool_use with paired results.
+	 *
+	 * @param toolResults - Map of tool_use_id → tool_result hoisted by the processor.
+	 */
 	private formatContent(content: string | ContentBlockParam[], toolResults?: Record<string, any>): TemplateResult {
 		if (typeof content === "string") {
 			return this.formatStringContent(content);
@@ -151,6 +171,10 @@ export class SimpleConversationView extends LitElement {
 		return html`<pre>${JSON.stringify(content, null, 2)}</pre>`;
 	}
 
+	/**
+	 * Finds all occurrences of `<tag>...</tag>` (raw or HTML-escaped) and returns
+	 * inner text plus the string with those blocks removed.
+	 */
 	private extractTaggedBlocks(
 		content: string,
 		tagName: string,
@@ -205,6 +229,7 @@ export class SimpleConversationView extends LitElement {
 		return { block: null, remaining: content };
 	}
 
+	/** Wraps extracted tag blocks in a numbered collapsible markdown section. */
 	private renderTaggedCollapsibleSections(
 		title: string,
 		blocks: string[],
@@ -235,6 +260,7 @@ export class SimpleConversationView extends LitElement {
 		);
 	}
 
+	/** Codex injects these XML-like tags in user messages; extracted into collapsible sections. */
 	private static readonly CODEX_CONTEXT_TAGS: ReadonlyArray<{ tag: string; title: string }> = [
 		{ tag: "permissions instructions", title: "Permissions Instructions" },
 		{ tag: "collaboration_mode", title: "Collaboration Mode" },
@@ -242,6 +268,7 @@ export class SimpleConversationView extends LitElement {
 		{ tag: "environment_context", title: "Environment Context" },
 	];
 
+	/** True when the string contains only Codex context tags and no user text. */
 	private isCodexContextOnlyText(content: string): boolean {
 		const { sections, remaining } = this.extractCodexContextSections(content);
 		if (sections.length === 0) {
@@ -253,6 +280,7 @@ export class SimpleConversationView extends LitElement {
 		return afterSystemReminder.trim().length === 0;
 	}
 
+	/** Returns true when message text is only Codex context tags (no user-visible content). */
 	private isCodexContextOnlyMessage(message: EnhancedMessageParam): boolean {
 		if (!Array.isArray(message.content) || message.content.length === 0) {
 			return false;
@@ -266,6 +294,7 @@ export class SimpleConversationView extends LitElement {
 		});
 	}
 
+	/** Pulls known Codex context tag blocks from the start of a message string. */
 	private extractCodexContextSections(content: string): { sections: Array<{ title: string; blocks: string[] }>; remaining: string } {
 		const sections: Array<{ title: string; blocks: string[] }> = [];
 		let remaining = content;
@@ -281,6 +310,10 @@ export class SimpleConversationView extends LitElement {
 		return { sections, remaining };
 	}
 
+	/**
+	 * Parses a plain-text message: main markdown body plus collapsible sections
+	 * for Codex context tags, EXTREMELY_IMPORTANT, and system-reminder blocks.
+	 */
 	private formatStringContent(content: string): TemplateResult {
 		const { sections: codexContextSections, remaining: afterCodexContext } =
 			this.extractCodexContextSections(content);
@@ -299,6 +332,7 @@ export class SimpleConversationView extends LitElement {
 		`;
 	}
 
+	/** Converts system prompt (string or block array) to HTML via markdown. */
 	private formatSystem(system: string | TextBlockParam[] | undefined): string {
 		if (!system) return "";
 
@@ -321,6 +355,7 @@ export class SimpleConversationView extends LitElement {
 		return JSON.stringify(system, null, 2);
 	}
 
+	/** Renders the final assistant response message for a conversation thread. */
 	private formatResponseContent(response: Message): TemplateResult {
 		if (!response) return html``;
 
@@ -366,24 +401,28 @@ export class SimpleConversationView extends LitElement {
 		return html`<pre>${JSON.stringify(response, null, 2)}</pre>`;
 	}
 
+	/** Formats `ToolName(param)` header text for single-argument tools. */
 	private formatSingleParam(toolName: string, paramValue: string | undefined, paramName: string = ""): TemplateResult {
 		return paramValue
 			? html`${toolName}(<span class="text-vs-text">${this.unescapeHtml(paramValue)}</span>)`
 			: html`${toolName}`;
 	}
 
+	/** Formats `ToolName(a, b, ...)` header text for multi-argument tools. */
 	private formatMultiParam(toolName: string, params: string[]): TemplateResult {
 		return params.length > 0
 			? html`${toolName}(<span class="text-vs-text">${params.join(", ")}</span>)`
 			: html`${toolName}`;
 	}
 
+	/** Decodes HTML entities in tool argument strings for display. */
 	private unescapeHtml(str: string): string {
 		const div = document.createElement("div");
 		div.innerHTML = str;
 		return div.textContent || div.innerText || "";
 	}
 
+	/** Wraps tool output in a horizontally scrollable container. */
 	private wrapInScrollable(content: TemplateResult | string, usePreFormatting: boolean = true): TemplateResult {
 		if (usePreFormatting && typeof content === "string") {
 			return html`
@@ -395,6 +434,11 @@ export class SimpleConversationView extends LitElement {
 		return html` <div class="overflow-x-auto">${content}</div> `;
 	}
 
+	/**
+	 * Generic `[+]/[-]` collapsible section used for system prompt, tools, and tags.
+	 *
+	 * @param count - Optional item count appended to the title, e.g. "Tools (12)".
+	 */
 	private renderCollapsibleSection(
 		title: string,
 		content: TemplateResult,
@@ -421,6 +465,7 @@ export class SimpleConversationView extends LitElement {
 		`;
 	}
 
+	/** Human-readable one-line summary for each known Claude Code tool name. */
 	private getToolDisplayName(toolUse: any, toolResult?: any): TemplateResult {
 		const toolName = toolUse.name;
 		const input = toolUse.input;
@@ -489,6 +534,7 @@ export class SimpleConversationView extends LitElement {
 		}
 	}
 
+	/** Renders expanded tool input — diffs for Edit, todos for TodoWrite, JSON fallback. */
 	private renderToolUseContent(toolUse: any): TemplateResult {
 		const toolName = toolUse.name;
 		const input = toolUse.input;
@@ -605,6 +651,7 @@ export class SimpleConversationView extends LitElement {
 		return this.wrapInScrollable(JSON.stringify(input, null, 2));
 	}
 
+	/** Collapsible tool_result output plus optional raw tool_use JSON dump. */
 	private renderToolResult(toolResult: any, toolUse?: any): TemplateResult {
 		return html`
 			<div class="mb-4">
@@ -640,6 +687,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		`;
 	}
 
+	/** Standard layout wrapper for a tool header, body, and optional result. */
 	private renderToolContainer(
 		toolUse: any,
 		toolResult?: any,
@@ -672,6 +720,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		`;
 	}
 
+	/** Shows the first 10 lines of Write tool content with an expand hint. */
 	private renderWritePreview(toolUse: any): TemplateResult {
 		const input = toolUse.input;
 		if (!input?.content) {
@@ -689,6 +738,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		`;
 	}
 
+	/** Renders a line-based diff between old and new strings for Edit/MultiEdit tools. */
 	private renderDiff(oldStr: string, newStr: string): TemplateResult[] {
 		const diff = Diff.diffLines(oldStr, newStr);
 		const diffLines = [];
@@ -714,6 +764,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		return diffLines;
 	}
 
+	/** Builds the subtitle under each conversation header (message count + API format). */
 	private formatMetadataLine(conversation: SimpleConversation): string {
 		const messageCount = `${conversation.messages.length + 1} messages`;
 		if (conversation.apiFormatDisplay) {
@@ -722,10 +773,12 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		return messageCount;
 	}
 
+	/** Returns true when the final request included tool definitions. */
 	private hasTools(conversation: SimpleConversation): boolean {
 		return !!(conversation.finalPair.request.tools && conversation.finalPair.request.tools.length > 0);
 	}
 
+	/** Renders expandable tool schema cards from the request's `tools` array. */
 	private renderTools(tools: ToolUnion[]): TemplateResult {
 		return html`
 			${tools.map((tool) => {
@@ -775,6 +828,7 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 		`;
 	}
 
+	/** Full inner layout for one conversation: system, tools, messages, response. */
 	private renderConversationContent(conversation: SimpleConversation): TemplateResult {
 		return html`
 			<!-- System Prompt (Expandable) -->

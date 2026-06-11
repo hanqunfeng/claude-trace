@@ -1,5 +1,26 @@
 #!/usr/bin/env node
 
+/**
+ * @file cli.ts
+ * @description Entry point for the `claude-trace` command.
+ *
+ * Thin CLI wrapper that parses arguments, dispatches to utility modes
+ * (token extraction, HTML generation, index building), or delegates interactive
+ * tracing to `trace-runner.ts` via the Claude Code tool profile.
+ *
+ * Architecture:
+ * ```
+ * cli.ts → claudeProfile (tools/claude.ts) → trace-runner.ts
+ *                                              ├─ reverse-proxy.ts  (V2+ native)
+ *                                              └─ interceptor.ts    (V1 Node.js)
+ * ```
+ *
+ * All shared argument parsing, logging, and HTML/index helpers live in
+ * `cli-common.ts` so `opencode-cli.ts` and `codex-cli.ts` stay consistent.
+ *
+ * Registered as the `claude-trace` bin in package.json.
+ */
+
 import { claudeProfile, extractClaudeToken } from "./tools/claude";
 import { runWithTracing } from "./trace-runner";
 import {
@@ -11,6 +32,12 @@ import {
 	generateIndex,
 } from "./cli-common";
 
+/**
+ * Print usage help for all `claude-trace` modes and options to stdout.
+ *
+ * Documents interactive tracing, `--extract-token`, `--generate-html`,
+ * `--index`, and all shared flags (`--run-with`, `--log`, etc.).
+ */
 function showHelp(): void {
 	console.log(`
 ${colors.blue}Claude Trace${colors.reset}
@@ -96,6 +123,19 @@ For more information, visit: https://github.com/hanqunfeng/claude-trace
 `);
 }
 
+/**
+ * Main CLI dispatcher.
+ *
+ * Modes are mutually exclusive and checked in priority order:
+ * 1. `--help` / `-h` — print usage and exit
+ * 2. `--extract-token` — OAuth token extraction (Claude-only)
+ * 3. `--generate-html` — offline HTML report from an existing JSONL log
+ * 4. `--index` — rebuild conversation summaries in `.claude-trace/`
+ * 5. Default — launch Claude with live traffic tracing via `runWithTracing`
+ *
+ * Arguments after `--run-with` are passed verbatim to the Claude child process.
+ * All other flags are consumed by `parseTraceArgs` before dispatch.
+ */
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	const { traceArgs, toolArgs, includeAllRequests, openInBrowser, logSensitiveHeaders, logBaseName } =
@@ -106,6 +146,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	}
 
+	// `--claude-path` takes the next positional arg as the binary location.
 	let customClaudePath: string | undefined;
 	const claudePathIndex = traceArgs.indexOf("--claude-path");
 	if (claudePathIndex !== -1 && traceArgs[claudePathIndex + 1]) {
@@ -135,6 +176,7 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// Default mode: start proxy/interceptor + spawn Claude with logging.
 	await runWithTracing(claudeProfile, toolArgs, {
 		includeAllRequests,
 		openInBrowser,

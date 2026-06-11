@@ -1,3 +1,11 @@
+/**
+ * @file Root Lit application for the self-contained trace HTML viewer.
+ *
+ * Reads base64-decoded session data from `window.claudeData`, processes raw
+ * pairs into conversations via {@link SharedConversationProcessor}, and
+ * switches between conversation, raw, and JSON debug views with model filtering.
+ */
+
 import { LitElement, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { ClaudeData } from "../../src/types";
@@ -7,6 +15,7 @@ import {
 	ProcessedPair,
 } from "../../src/shared-conversation-processor";
 
+/** Top-level trace viewer shell mounted on `#app` in generated HTML reports. */
 @customElement("claude-app")
 export class ClaudeApp extends LitElement {
 	@state() private data: ClaudeData = { rawPairs: [] };
@@ -15,18 +24,23 @@ export class ClaudeApp extends LitElement {
 	@state() private currentView: "conversations" | "raw" | "json" = "conversations";
 	@state() private selectedModels: Set<string> = new Set();
 
-	// Disable shadow DOM to use global Tailwind styles
+	/**
+	 * Render into the light DOM so Tailwind utility classes from the injected
+	 * stylesheet apply to child elements (shadow DOM would isolate styles).
+	 */
 	createRenderRoot() {
 		console.log("createRenderRoot");
 		return this;
 	}
 
+	/** Loads embedded trace data and runs the shared conversation pipeline. */
 	connectedCallback() {
 		super.connectedCallback();
 		this.data = window.claudeData || { rawPairs: [] };
 		this.processData();
 	}
 
+	/** Normalizes raw pairs and builds conversation threads for the UI. */
 	private processData() {
 		const start = performance.now();
 
@@ -41,7 +55,7 @@ export class ClaudeApp extends LitElement {
 			includeShortConversations: includeAllRequests,
 		});
 
-		// Initialize with all models available, but haiku models disabled by default in UI
+		// Collect every model name seen across conversations, processed pairs, and raw logs
 		const conversationModels = new Set(this.conversations.flatMap((c) => Array.from(c.models)));
 		const processedPairModels = new Set(this.processedPairs.map((p) => p.model));
 		const rawPairModels = new Set(this.data.rawPairs.map((pair) => pair.request.body?.model || "unknown"));
@@ -52,10 +66,12 @@ export class ClaudeApp extends LitElement {
 		console.log(`Processed data in ${performance.now() - start}ms`);
 	}
 
+	/** Switches the active tab: conversations, raw calls, or JSON debug. */
 	private switchView(view: "conversations" | "raw" | "json") {
 		this.currentView = view;
 	}
 
+	/** Toggles a model in the filter set; triggers Lit re-render via new Set reference. */
 	private toggleModel(model: string) {
 		const newSelectedModels = new Set(this.selectedModels);
 		if (newSelectedModels.has(model)) {
@@ -66,6 +82,7 @@ export class ClaudeApp extends LitElement {
 		this.selectedModels = newSelectedModels;
 	}
 
+	/** Conversations where at least one model is currently selected. */
 	private get filteredConversations() {
 		return this.conversations.filter((c) => {
 			// Show conversation if ANY of its models are selected
@@ -73,10 +90,12 @@ export class ClaudeApp extends LitElement {
 		});
 	}
 
+	/** Processed pairs filtered by selected models (JSON debug view). */
 	private get filteredProcessedPairs() {
 		return this.processedPairs.filter((pair) => this.selectedModels.has(pair.model));
 	}
 
+	/** Raw pairs filtered by selected models (unused — raw view shows all). */
 	private get filteredRawPairs() {
 		return this.data.rawPairs.filter((pair) => {
 			const model = pair.request.body?.model || "unknown";
@@ -84,11 +103,13 @@ export class ClaudeApp extends LitElement {
 		});
 	}
 
+	/** All raw pairs with a non-null response — no model filter applied. */
 	private get allRawPairs() {
 		// Debug view shows ALL raw pairs without any filtering
 		return this.data.rawPairs.filter((pair) => pair.response !== null);
 	}
 
+	/** Count of conversations per model for the filter checkbox row. */
 	private get modelCounts() {
 		const counts = new Map<string, number>();
 		this.conversations.forEach((c) => {
@@ -100,6 +121,7 @@ export class ClaudeApp extends LitElement {
 		return counts;
 	}
 
+	/** Resolves the tool-specific brand string for the page header. */
 	private getBrandName(): string {
 		const tool = this.data.metadata?.tool as string | undefined;
 		if (tool === "claude") return "claude-trace";
@@ -108,6 +130,7 @@ export class ClaudeApp extends LitElement {
 		return "trace";
 	}
 
+	/** Main layout: header, view tabs, model filters, and active view content. */
 	render() {
 		const modelCounts = this.modelCounts;
 		const filteredConversations = this.filteredConversations;

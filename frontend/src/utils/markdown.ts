@@ -1,3 +1,10 @@
+/**
+ * @file Safe markdown-to-HTML conversion for the trace viewer.
+ *
+ * Escapes raw HTML before parsing with `marked` to reduce XSS risk when
+ * rendering user and assistant message content in the self-contained report.
+ */
+
 import { marked } from "marked";
 
 // Configure marked for safe HTML rendering
@@ -7,7 +14,7 @@ marked.setOptions({
 });
 
 /**
- * Escape HTML entities to prevent XSS
+ * Escape HTML entities to prevent XSS when content is later parsed as markdown.
  */
 function escapeHtml(text: string): string {
 	return text
@@ -19,9 +26,10 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * Convert markdown text to HTML string with proper escaping
- * @param markdown - The markdown text to convert
- * @returns HTML string
+ * Convert markdown text to an HTML string with entity escaping applied first.
+ *
+ * @param markdown - Raw markdown from logged messages.
+ * @returns HTML string safe for `unsafeHTML` rendering in Lit templates.
  */
 export function markdownToHtml(markdown: string): string {
 	if (!markdown) return "";

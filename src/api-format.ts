@@ -1,6 +1,19 @@
+/**
+ * @file api-format.ts
+ * @description Heuristics for detecting and labeling LLM API wire formats.
+ *
+ * OpenCode and Codex may proxy Anthropic Messages, OpenAI Chat Completions,
+ * or OpenAI Responses APIs. These helpers infer format from npm package names,
+ * URL paths, and JSON body shapes for viewer display and parsing decisions.
+ */
+
 import type { ApiFormat } from "./tools/types";
 import type { RawPair } from "./types";
 
+/**
+ * Infer API format from an OpenCode provider npm package name.
+ * @param npm - Value from opencode.json provider config (e.g. "@ai-sdk/anthropic")
+ */
 export function inferApiFormatFromNpm(npm: string): ApiFormat {
 	if (npm.includes("anthropic")) {
 		return "anthropic";
@@ -14,6 +27,10 @@ export function inferApiFormatFromNpm(npm: string): ApiFormat {
 	return "unknown";
 }
 
+/**
+ * Infer API format from the request URL path segment.
+ * @param url - Full request URL
+ */
 export function inferApiFormatFromUrl(url: string | undefined): ApiFormat {
 	if (!url) {
 		return "unknown";
@@ -30,6 +47,11 @@ export function inferApiFormatFromUrl(url: string | undefined): ApiFormat {
 	return "unknown";
 }
 
+/**
+ * Infer API format from JSON request/response body structure.
+ * Checks for provider-specific top-level keys and message block shapes.
+ * @param body - Parsed JSON body
+ */
 export function inferApiFormatFromBody(body: unknown): ApiFormat {
 	if (!body || typeof body !== "object") {
 		return "unknown";
@@ -65,6 +87,7 @@ export function inferApiFormatFromBody(body: unknown): ApiFormat {
 	return "unknown";
 }
 
+/** Human-readable labels shown in the HTML viewer and index summaries. */
 const API_FORMAT_LABELS: Record<ApiFormat, string> = {
 	anthropic: "Anthropic Messages",
 	openai: "OpenAI Chat",
@@ -72,10 +95,16 @@ const API_FORMAT_LABELS: Record<ApiFormat, string> = {
 	unknown: "Unknown",
 };
 
+/** @param format - Internal ApiFormat enum value */
 export function formatApiFormatLabel(format: ApiFormat): string {
 	return API_FORMAT_LABELS[format] ?? format;
 }
 
+/**
+ * Build a display string for conversations that used multiple API formats.
+ * @param formats - List of formats detected across pairs in a conversation
+ * @returns Single label, "Mixed (...)", or undefined if all unknown
+ */
 export function formatApiFormatsDisplay(formats: ApiFormat[]): string | undefined {
 	const unique = [...new Set(formats.filter((format) => format && format !== "unknown"))];
 	if (unique.length === 0) {
@@ -87,6 +116,11 @@ export function formatApiFormatsDisplay(formats: ApiFormat[]): string | undefine
 	return `Mixed (${unique.map(formatApiFormatLabel).join(" + ")})`;
 }
 
+/**
+ * Best-effort API format detection for a logged request/response pair.
+ * Prefers explicit proxy annotation, then URL, then request body, then response body.
+ * @param pair - One RawPair from JSONL logs
+ */
 export function detectApiFormat(pair: RawPair): ApiFormat {
 	const response = pair.response;
 	if (response && "api_format" in response && response.api_format) {

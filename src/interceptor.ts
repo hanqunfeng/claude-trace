@@ -1,25 +1,57 @@
+/**
+ * @file Runtime fetch/HTTP interceptor for Claude Code V1 (Node.js script mode).
+ *
+ * Patches `global.fetch` and Node's `http`/`https` modules to capture Anthropic
+ * Messages API traffic (and optionally AWS Bedrock) before it reaches the upstream.
+ * Used when Claude Code is launched as a Node.js script via `--require interceptor-loader.js`.
+ * Native V2+ binaries use {@link ReverseProxyServer} instead.
+ */
+
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { RawPair } from "./types";
 import { HTMLGenerator } from "./html-generator";
 
+/** Configuration for {@link ClaudeTrafficLogger}. */
 export interface InterceptorConfig {
+	/** Directory for JSONL and HTML log files. */
 	logDirectory?: string;
+	/** Base name for log files; falls back to env `CLAUDE_TRACE_LOG_NAME` or timestamp. */
 	logBaseName?: string;
+	/** Regenerate HTML after each logged pair. */
 	enableRealTimeHTML?: boolean;
+	/** Console log verbosity (currently unused; reserved for future use). */
 	logLevel?: "debug" | "info" | "warn" | "error";
 }
 
+/**
+ * Captures Claude API request/response pairs by monkey-patching fetch and Node HTTP.
+ *
+ * Writes append-only JSONL logs and optionally regenerates a self-contained HTML
+ * report after each exchange. Sensitive headers are redacted by default.
+ */
 export class ClaudeTrafficLogger {
+	/** Absolute path to the log directory. */
 	private logDir: string;
+	/** Append-only JSONL log file path. */
 	private logFile: string;
+	/** Self-contained HTML report output path. */
 	private htmlFile: string;
+	/** In-flight requests awaiting a matching response (keyed by generated request id). */
 	private pendingRequests: Map<string, any> = new Map();
+	/** Completed request/response pairs held in memory for HTML regeneration. */
 	private pairs: RawPair[] = [];
+	/** Resolved configuration with defaults applied. */
 	private config: InterceptorConfig;
+	/** Frontend bundle renderer for HTML reports. */
 	private htmlGenerator: HTMLGenerator;
 
+	/**
+	 * Initializes log paths, creates the log directory, and clears the JSONL file.
+	 *
+	 * @param config - Logger configuration; sensible defaults are applied.
+	 */
 	constructor(config: InterceptorConfig = {}) {
 		this.config = {
 			logDirectory: ".claude-trace",
@@ -28,57 +60,67 @@ export class ClaudeTrafficLogger {
 			...config,
 		};
 
-		// Create log directory if it doesn't exist
 		this.logDir = this.config.logDirectory!;
 		if (!fs.existsSync(this.logDir)) {
 			fs.mkdirSync(this.logDir, { recursive: true });
 		}
 
-		// Generate filenames based on custom name or timestamp
+		// Prefer explicit config, then env override, then timestamped default.
 		const logBaseName = config?.logBaseName || process.env.CLAUDE_TRACE_LOG_NAME;
 		const fileBaseName =
-			logBaseName || `log-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").slice(0, -5)}`; // Remove milliseconds and Z
+			logBaseName || `log-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").slice(0, -5)}`;
 
 		this.logFile = path.join(this.logDir, `${fileBaseName}.jsonl`);
 		this.htmlFile = path.join(this.logDir, `${fileBaseName}.html`);
 
-		// Initialize HTML generator
 		this.htmlGenerator = new HTMLGenerator();
 
-		// Clear log file
 		fs.writeFileSync(this.logFile, "");
 
-		// Output the actual filenames with absolute paths
 		console.log(`Logs will be written to:`);
 		console.log(`  JSONL: ${path.resolve(this.logFile)}`);
 		console.log(`  HTML:  ${path.resolve(this.htmlFile)}`);
 	}
 
+	/**
+	 * Returns true when a URL targets the Claude Messages API (or all Anthropic/Bedrock
+	 * traffic when `CLAUDE_TRACE_INCLUDE_ALL_REQUESTS=true`).
+	 *
+	 * Respects `ANTHROPIC_BASE_URL` for custom proxy endpoints.
+	 *
+	 * @param url - Request URL as a string or `URL` object.
+	 */
 	private isClaudeAPI(url: string | URL): boolean {
 		const urlString = typeof url === "string" ? url : url.toString();
 		const includeAllRequests = process.env.CLAUDE_TRACE_INCLUDE_ALL_REQUESTS === "true";
 
-		// Support custom ANTHROPIC_BASE_URL
+		// Support custom ANTHROPIC_BASE_URL (e.g. when already pointing at a local proxy).
 		const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
 		const apiHost = new URL(baseUrl).hostname;
 
-		// Check for direct Anthropic API calls
 		const isAnthropicAPI = urlString.includes(apiHost);
 
-		// Check for AWS Bedrock Claude API calls
+		// AWS Bedrock uses a different host pattern but the same Messages API shape.
 		const isBedrockAPI = urlString.includes("bedrock-runtime.") && urlString.includes(".amazonaws.com");
 
 		if (includeAllRequests) {
-			return isAnthropicAPI || isBedrockAPI; // Capture all Claude API requests
+			return isAnthropicAPI || isBedrockAPI;
 		}
 
 		return (isAnthropicAPI && urlString.includes("/v1/messages")) || isBedrockAPI;
 	}
 
+	/** Generates a unique correlation id for pairing requests with responses. */
 	private generateRequestId(): string {
 		return `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 	}
 
+	/**
+	 * Redacts sensitive header values by truncating to prefix/suffix.
+	 *
+	 * @param headers - Flat header map from fetch or Node HTTP options.
+	 * @returns Copy of headers with sensitive values partially redacted.
+	 */
 	private redactSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
 		const redactedHeaders = { ...headers };
 		const sensitiveKeys = [
@@ -96,7 +138,6 @@ export class ClaudeTrafficLogger {
 		for (const key of Object.keys(redactedHeaders)) {
 			const lowerKey = key.toLowerCase();
 			if (sensitiveKeys.some((sensitive) => lowerKey.includes(sensitive))) {
-				// Keep first 10 chars and last 4 chars, redact middle
 				const value = redactedHeaders[key];
 				if (value && value.length > 14) {
 					redactedHeaders[key] = `${value.substring(0, 10)}...${value.slice(-4)}`;
@@ -111,11 +152,18 @@ export class ClaudeTrafficLogger {
 		return redactedHeaders;
 	}
 
+	/** Clones a fetch Response so the body can be read for logging without consuming it. */
 	private async cloneResponse(response: Response): Promise<Response> {
-		// Clone the response to avoid consuming the body
 		return response.clone();
 	}
 
+	/**
+	 * Normalizes request body into a log-friendly value.
+	 *
+	 * Parses JSON strings, expands FormData entries, and passes through other types.
+	 *
+	 * @param body - Raw request body from fetch `init.body` or Node `req.write` chunks.
+	 */
 	private async parseRequestBody(body: any): Promise<any> {
 		if (!body) return null;
 
@@ -138,6 +186,13 @@ export class ClaudeTrafficLogger {
 		return body;
 	}
 
+	/**
+	 * Reads and classifies a fetch Response body for logging.
+	 *
+	 * JSON responses are parsed; SSE and text responses are stored as raw strings.
+	 *
+	 * @param response - Cloned fetch Response (safe to consume).
+	 */
 	private async parseResponseBody(response: Response): Promise<{ body?: any; body_raw?: string }> {
 		const contentType = response.headers.get("content-type") || "";
 
@@ -152,28 +207,33 @@ export class ClaudeTrafficLogger {
 				const body_raw = await response.text();
 				return { body_raw };
 			} else {
-				// For other types, try to read as text
 				const body_raw = await response.text();
 				return { body_raw };
 			}
 		} catch (error) {
-			// Silent error handling during runtime
+			// Swallow parse errors so instrumentation never breaks the client request.
 			return {};
 		}
 	}
 
+	/** Installs both fetch and Node HTTP instrumentation. */
 	public instrumentAll(): void {
 		this.instrumentFetch();
 		this.instrumentNodeHTTP();
 	}
 
+	/**
+	 * Patches `global.fetch` to intercept Claude API calls.
+	 *
+	 * Idempotent: skips if already marked with `__claudeTraceInstrumented`.
+	 * Non-Claude URLs pass through to the original fetch unchanged.
+	 */
 	public instrumentFetch(): void {
 		if (!global.fetch) {
-			// Silent - fetch not available
 			return;
 		}
 
-		// Check if already instrumented by checking for our marker
+		// Prevent double-patching when the loader or hot-reload re-enters initialization.
 		if ((global.fetch as any).__claudeTraceInstrumented) {
 			return;
 		}
@@ -182,10 +242,8 @@ export class ClaudeTrafficLogger {
 		const logger = this;
 
 		global.fetch = async function (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-			// Convert input to URL for consistency
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
-			// Only intercept Claude API calls
 			if (!logger.isClaudeAPI(url)) {
 				return originalFetch(input, init);
 			}
@@ -193,30 +251,24 @@ export class ClaudeTrafficLogger {
 			const requestId = logger.generateRequestId();
 			const requestTimestamp = Date.now();
 
-			// Capture request details
 			const requestData = {
-				timestamp: requestTimestamp / 1000, // Convert to seconds (like Python version)
+				// Seconds since epoch to match Python claude-trace log format.
+				timestamp: requestTimestamp / 1000,
 				method: init.method || "GET",
 				url: url,
 				headers: logger.redactSensitiveHeaders(Object.fromEntries(new Headers(init.headers || {}).entries())),
 				body: await logger.parseRequestBody(init.body),
 			};
 
-			// Store pending request
 			logger.pendingRequests.set(requestId, requestData);
 
 			try {
-				// Make the actual request
 				const response = await originalFetch(input, init);
 				const responseTimestamp = Date.now();
 
-				// Clone response to avoid consuming the body
 				const clonedResponse = await logger.cloneResponse(response);
-
-				// Parse response body
 				const responseBodyData = await logger.parseResponseBody(clonedResponse);
 
-				// Create response data
 				const responseData = {
 					timestamp: responseTimestamp / 1000,
 					status_code: response.status,
@@ -224,46 +276,43 @@ export class ClaudeTrafficLogger {
 					...responseBodyData,
 				};
 
-				// Create paired request-response object
 				const pair: RawPair = {
 					request: requestData,
 					response: responseData,
 					logged_at: new Date().toISOString(),
 				};
 
-				// Remove from pending and add to pairs
 				logger.pendingRequests.delete(requestId);
 				logger.pairs.push(pair);
 
-				// Write to log file
 				await logger.writePairToLog(pair);
 
-				// Generate HTML if enabled
 				if (logger.config.enableRealTimeHTML) {
 					await logger.generateHTML();
 				}
 
 				return response;
 			} catch (error) {
-				// Remove from pending requests on error
 				logger.pendingRequests.delete(requestId);
 				throw error;
 			}
 		};
 
-		// Mark fetch as instrumented
 		(global.fetch as any).__claudeTraceInstrumented = true;
-
-		// Silent initialization
 	}
 
+	/**
+	 * Patches Node's `http` and `https` `request`/`get` methods.
+	 *
+	 * Some Claude Code versions use Node HTTP instead of fetch for API calls.
+	 * Each method is patched at most once via a `__claudeTraceInstrumented` marker.
+	 */
 	public instrumentNodeHTTP(): void {
 		try {
 			const http = require("http");
 			const https = require("https");
 			const logger = this;
 
-			// Instrument http.request
 			if (http.request && !(http.request as any).__claudeTraceInstrumented) {
 				const originalHttpRequest = http.request;
 				http.request = function (options: any, callback?: any) {
@@ -272,7 +321,6 @@ export class ClaudeTrafficLogger {
 				(http.request as any).__claudeTraceInstrumented = true;
 			}
 
-			// Instrument http.get
 			if (http.get && !(http.get as any).__claudeTraceInstrumented) {
 				const originalHttpGet = http.get;
 				http.get = function (options: any, callback?: any) {
@@ -281,7 +329,6 @@ export class ClaudeTrafficLogger {
 				(http.get as any).__claudeTraceInstrumented = true;
 			}
 
-			// Instrument https.request
 			if (https.request && !(https.request as any).__claudeTraceInstrumented) {
 				const originalHttpsRequest = https.request;
 				https.request = function (options: any, callback?: any) {
@@ -290,7 +337,6 @@ export class ClaudeTrafficLogger {
 				(https.request as any).__claudeTraceInstrumented = true;
 			}
 
-			// Instrument https.get
 			if (https.get && !(https.get as any).__claudeTraceInstrumented) {
 				const originalHttpsGet = https.get;
 				https.get = function (options: any, callback?: any) {
@@ -299,34 +345,40 @@ export class ClaudeTrafficLogger {
 				(https.get as any).__claudeTraceInstrumented = true;
 			}
 		} catch (error) {
-			// Silent error handling
+			// http/https may be unavailable in some embedded runtimes; fail silently.
 		}
 	}
 
+	/**
+	 * Wraps a Node HTTP(S) request to capture body and response for Claude API URLs.
+	 *
+	 * Intercepts `req.write` to accumulate the request body, then logs on `res.end`.
+	 *
+	 * @param originalRequest - Unpatched `http.request` or `https.request`.
+	 * @param options - Request options or URL string.
+	 * @param callback - Optional response callback passed to the original request.
+	 * @param isHttps - Whether the underlying module is `https`.
+	 * @returns The outbound `ClientRequest` with wrapped `write`.
+	 */
 	private interceptNodeRequest(originalRequest: any, options: any, callback: any, isHttps: boolean) {
-		// Parse URL from options
 		const url = this.parseNodeRequestURL(options, isHttps);
 
 		if (!this.isClaudeAPI(url)) {
 			return originalRequest.call(this, options, callback);
 		}
 
-		const requestId = this.generateRequestId();
 		const requestTimestamp = Date.now();
 		let requestBody = "";
 
-		// Create the request
 		const req = originalRequest.call(this, options, (res: any) => {
 			const responseTimestamp = Date.now();
 			let responseBody = "";
 
-			// Capture response data
 			res.on("data", (chunk: any) => {
 				responseBody += chunk;
 			});
 
 			res.on("end", async () => {
-				// Process the captured request/response
 				const requestData = {
 					timestamp: requestTimestamp / 1000,
 					method: options.method || "GET",
@@ -356,13 +408,12 @@ export class ClaudeTrafficLogger {
 				}
 			});
 
-			// Call original callback if provided
 			if (callback) {
 				callback(res);
 			}
 		});
 
-		// Capture request body
+		// Node HTTP does not expose the body until write/end; wrap write to capture it.
 		const originalWrite = req.write;
 		req.write = function (chunk: any) {
 			if (chunk) {
@@ -374,6 +425,12 @@ export class ClaudeTrafficLogger {
 		return req;
 	}
 
+	/**
+	 * Reconstructs a full URL string from Node HTTP request options.
+	 *
+	 * @param options - URL string or options object with host/path fields.
+	 * @param isHttps - Whether the caller is the `https` module.
+	 */
 	private parseNodeRequestURL(options: any, isHttps: boolean): string {
 		if (typeof options === "string") {
 			return options;
@@ -387,6 +444,12 @@ export class ClaudeTrafficLogger {
 		return `${protocol}//${hostname}${port}${path}`;
 	}
 
+	/**
+	 * Parses a raw response body string based on Content-Type (Node HTTP path).
+	 *
+	 * @param body - Accumulated response body from `res.on("data")`.
+	 * @param contentType - Value of the `content-type` response header, if any.
+	 */
 	private async parseResponseBodyFromString(
 		body: string,
 		contentType?: string,
@@ -404,15 +467,17 @@ export class ClaudeTrafficLogger {
 		}
 	}
 
+	/** Appends a single JSONL line for one request/response pair. */
 	private async writePairToLog(pair: RawPair): Promise<void> {
 		try {
 			const jsonLine = JSON.stringify(pair) + "\n";
 			fs.appendFileSync(this.logFile, jsonLine);
 		} catch (error) {
-			// Silent error handling during runtime
+			// Swallow write errors so logging never crashes the instrumented process.
 		}
 	}
 
+	/** Regenerates the self-contained HTML report from all logged pairs. */
 	private async generateHTML(): Promise<void> {
 		try {
 			const includeAllRequests = process.env.CLAUDE_TRACE_INCLUDE_ALL_REQUESTS === "true";
@@ -421,12 +486,17 @@ export class ClaudeTrafficLogger {
 				includeAllRequests,
 				tool: "claude",
 			});
-			// Silent HTML generation
 		} catch (error) {
-			// Silent error handling during runtime
+			// HTML generation is best-effort; failures should not affect the client.
 		}
 	}
 
+	/**
+	 * Flushes orphaned pending requests and optionally opens the HTML report.
+	 *
+	 * Called on process exit via {@link initializeInterceptor}. Requests that never
+	 * received a response are logged with a `ORPHANED_REQUEST` note.
+	 */
 	public cleanup(): void {
 		console.log("Cleaning up orphaned requests...");
 
@@ -449,7 +519,6 @@ export class ClaudeTrafficLogger {
 		this.pendingRequests.clear();
 		console.log(`Cleanup complete. Logged ${this.pairs.length} pairs`);
 
-		// Open browser if requested
 		const shouldOpenBrowser = process.env.CLAUDE_TRACE_OPEN_BROWSER === "true";
 		if (shouldOpenBrowser && fs.existsSync(this.htmlFile)) {
 			try {
@@ -461,6 +530,11 @@ export class ClaudeTrafficLogger {
 		}
 	}
 
+	/**
+	 * Returns current logging statistics and output file paths.
+	 *
+	 * @returns Snapshot of pair count, pending request count, and log file paths.
+	 */
 	public getStats() {
 		return {
 			totalPairs: this.pairs.length,
@@ -471,12 +545,21 @@ export class ClaudeTrafficLogger {
 	}
 }
 
-// Global logger instance
+/** Singleton logger instance shared across the process. */
 let globalLogger: ClaudeTrafficLogger | null = null;
 
-// Track if event listeners have been set up
+/** Guards against registering duplicate process exit handlers. */
 let eventListenersSetup = false;
 
+/**
+ * Creates and activates the global traffic logger (singleton).
+ *
+ * Patches fetch/HTTP immediately and registers cleanup handlers for
+ * `exit`, `SIGINT`, `SIGTERM`, and `uncaughtException`.
+ *
+ * @param config - Optional logger configuration.
+ * @returns The active {@link ClaudeTrafficLogger} instance.
+ */
 export function initializeInterceptor(config?: InterceptorConfig): ClaudeTrafficLogger {
 	if (globalLogger) {
 		console.warn("Interceptor already initialized");
@@ -486,7 +569,6 @@ export function initializeInterceptor(config?: InterceptorConfig): ClaudeTraffic
 	globalLogger = new ClaudeTrafficLogger(config);
 	globalLogger.instrumentAll();
 
-	// Setup cleanup on process exit only once
 	if (!eventListenersSetup) {
 		const cleanup = () => {
 			if (globalLogger) {
@@ -509,6 +591,11 @@ export function initializeInterceptor(config?: InterceptorConfig): ClaudeTraffic
 	return globalLogger;
 }
 
+/**
+ * Returns the active logger instance, or `null` if not yet initialized.
+ *
+ * @returns Global {@link ClaudeTrafficLogger} or `null`.
+ */
 export function getLogger(): ClaudeTrafficLogger | null {
 	return globalLogger;
 }

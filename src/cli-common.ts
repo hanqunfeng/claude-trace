@@ -1,8 +1,17 @@
+/**
+ * @file cli-common.ts
+ * @description Shared CLI utilities used by claude-trace, opencode-trace, and codex-trace.
+ *
+ * Provides colored console output, argument parsing, HTML generation from logs,
+ * conversation index generation, and debug/error logging helpers for the reverse proxy.
+ */
+
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { HTMLGenerator } from "./html-generator";
 
+/** ANSI escape codes for terminal-colored log output. */
 export const colors = {
 	red: "\x1b[0;31m",
 	green: "\x1b[0;32m",
@@ -13,10 +22,16 @@ export const colors = {
 
 type ColorName = keyof typeof colors;
 
+/**
+ * Print a colored message to stdout.
+ * @param message - Text to print
+ * @param color - Color key from `colors` (default: no color)
+ */
 export function log(message: string, color: ColorName = "reset"): void {
 	console.log(`${colors[color]}${message}${colors.reset}`);
 }
 
+/** @returns true when OPENCODE_TRACE_DEBUG=1 or "true" (enables verbose proxy stderr). */
 export function isTraceDebugEnabled(): boolean {
 	const value = process.env.OPENCODE_TRACE_DEBUG;
 	return value === "1" || value === "true";
@@ -29,7 +44,11 @@ export function traceDebug(message: string): void {
 	}
 }
 
-/** Persist runtime proxy errors to log dir; stderr only in debug mode. */
+/**
+ * Persist runtime proxy errors to log dir; stderr only in debug mode.
+ * @param message - Error description with context
+ * @param logDirectory - Tool log dir (e.g. ".opencode-trace") for proxy-errors.log
+ */
 export function traceRuntimeError(message: string, logDirectory?: string): void {
 	const line = `[${new Date().toISOString()}] ${message}\n`;
 	if (logDirectory) {
@@ -42,8 +61,11 @@ export function traceRuntimeError(message: string, logDirectory?: string): void 
 	traceDebug(message);
 }
 
+/** Result of splitting argv into trace flags vs tool passthrough args. */
 export interface ParsedTraceArgs {
+	/** Flags consumed by claude-trace / opencode-trace / codex-trace. */
 	traceArgs: string[];
+	/** Arguments after `--run-with` forwarded to the underlying tool. */
 	toolArgs: string[];
 	includeAllRequests: boolean;
 	openInBrowser: boolean;
@@ -51,6 +73,11 @@ export interface ParsedTraceArgs {
 	logBaseName?: string;
 }
 
+/**
+ * Parse shared CLI flags from process.argv slice.
+ * Everything after `--run-with` is treated as tool arguments.
+ * @param args - Typically process.argv.slice(2)
+ */
 export function parseTraceArgs(args: string[]): ParsedTraceArgs {
 	const argIndex = args.indexOf("--run-with");
 	const traceArgs = argIndex !== -1 ? args.slice(0, argIndex) : args;
@@ -72,6 +99,10 @@ export function parseTraceArgs(args: string[]): ParsedTraceArgs {
 	};
 }
 
+/**
+ * Extract input/output paths following the `--generate-html` flag.
+ * @param traceArgs - Parsed trace-side arguments only
+ */
 export function parseGenerateHtmlArgs(traceArgs: string[]): { inputFile?: string; outputFile?: string } {
 	const flagIndex = traceArgs.indexOf("--generate-html");
 	if (flagIndex === -1) {
@@ -91,6 +122,14 @@ export function parseGenerateHtmlArgs(traceArgs: string[]): { inputFile?: string
 	return { inputFile, outputFile };
 }
 
+/**
+ * CLI handler for `--generate-html`: build self-contained HTML from JSONL and optionally open it.
+ * @param inputFile - Path to .jsonl or .json log file
+ * @param outputFile - Optional output .html path
+ * @param includeAllRequests - Pass through to HTMLGenerator filtering
+ * @param openInBrowser - Launch default browser after generation
+ * @param tool - Tool name for report metadata
+ */
 export async function generateHTMLFromCLI(
 	inputFile: string,
 	outputFile?: string,
@@ -124,6 +163,10 @@ export async function generateHTMLFromCLI(
 	}
 }
 
+/**
+ * CLI handler for `--index`: scan log directory and write conversation summaries.
+ * @param traceDir - e.g. ".claude-trace"
+ */
 export async function generateIndex(traceDir: string): Promise<void> {
 	try {
 		const { IndexGenerator } = await import("./index-generator");

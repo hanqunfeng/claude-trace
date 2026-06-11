@@ -1,3 +1,12 @@
+/**
+ * @file Local HTTP reverse proxy for intercepting LLM API traffic from native binaries.
+ *
+ * Used when the target coding agent (Claude Code V2+, OpenCode, Codex CLI) is a native
+ * binary that cannot be launched with Node's `--require` interceptor hook. The proxy
+ * listens on 127.0.0.1, rewrites upstream URLs based on tool-specific routing rules,
+ * forwards requests transparently, and logs request/response pairs to JSONL/JSON/HTML.
+ */
+
 import * as https from "https";
 import * as http from "http";
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "http";
@@ -21,34 +30,61 @@ import type { RawPair, SSEEvent } from "./types";
 import type { ApiFormat, ModelRoute, ProviderRoute } from "./tools/types";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 
+/** Configuration options for {@link ReverseProxyServer}. */
 export interface ReverseProxyConfig {
+	/** TCP port to bind; `0` lets the OS assign an ephemeral port. */
 	port?: number;
+	/** Directory for JSONL, JSON, and HTML log files. */
 	logDirectory?: string;
+	/** Base name for log files; defaults to a timestamped `log-YYYY-MM-DD-...`. */
 	logBaseName?: string;
+	/** When true, log every proxied request, not just LLM API paths. */
 	includeAllRequests?: boolean;
+	/** Open the HTML report in the default browser when the proxy stops. */
 	openBrowser?: boolean;
+	/** When true, log auth headers verbatim instead of redacting them. */
 	logSensitiveHeaders?: boolean;
+	/** Default upstream base URL when no route matches (typically Anthropic API). */
 	targetBaseUrl?: string;
+	/** OpenCode provider-id → upstream base URL map for `/p/{providerId}/...` paths. */
 	routes?: Record<string, string>;
+	/** OpenCode model name → upstream route metadata. */
 	modelRoutes?: Record<string, ModelRoute>;
+	/** Codex path-prefix → upstream route metadata. */
 	providerRoutes?: ProviderRoute[];
+	/** Tool identifier stamped into HTML reports (`claude`, `opencode`, `codex`). */
 	tool?: string;
 }
 
+/** Resolved listen address returned by {@link ReverseProxyServer.start}. */
 export interface ProxyInfo {
+	/** Actual TCP port the server bound to (may differ from config when port was `0`). */
 	port: number;
+	/** Full loopback base URL clients should use (`http://127.0.0.1:{port}`). */
 	url: string;
 }
 
+/** Parsed components of an upstream base URL used to build outbound requests. */
 interface ParsedTarget {
+	/** URL scheme (`https:` or `http:`). */
 	protocol: string;
+	/** Upstream hostname for TLS SNI and the HTTP `Host` header. */
 	targetHost: string;
+	/** Upstream TCP port (443/80 when omitted from the URL). */
 	targetPort: number;
+	/** Path prefix from the base URL, without trailing slash (e.g. `/v1`). */
 	pathPrefix: string;
 }
 
+/**
+ * Parses a base URL string into host, port, protocol, and path prefix.
+ *
+ * @param targetBaseUrl - Full base URL (e.g. `https://api.anthropic.com/v1`).
+ * @returns Parsed target suitable for constructing upstream requests.
+ */
 function parseTargetBaseUrl(targetBaseUrl?: string): ParsedTarget {
 	const parsed = new URL(targetBaseUrl || "https://api.anthropic.com");
+	// Strip trailing slash from pathname so path concatenation stays predictable.
 	const pathPrefix = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
 	return {
 		protocol: parsed.protocol,
@@ -60,6 +96,10 @@ function parseTargetBaseUrl(targetBaseUrl?: string): ParsedTarget {
 	};
 }
 
+/**
+ * URL path segments that identify LLM API endpoints worth logging.
+ * Matched via substring check so query strings and provider prefixes still match.
+ */
 const LLM_API_PATHS = [
 	"/v1/messages",
 	"/messages",
@@ -71,6 +111,11 @@ const LLM_API_PATHS = [
 	"/backend-api/codex/responses",
 ];
 
+/**
+ * Returns true when the request path targets a known LLM API endpoint.
+ *
+ * @param urlPath - Raw request URL path (may include query string).
+ */
 function isLlmApiPath(urlPath: string | undefined): boolean {
 	if (!urlPath) {
 		return false;
@@ -78,6 +123,17 @@ function isLlmApiPath(urlPath: string | undefined): boolean {
 	return LLM_API_PATHS.some((segment) => urlPath.includes(segment));
 }
 
+/**
+ * Resolves upstream target for OpenCode provider-prefixed paths (`/p/{providerId}/...`).
+ *
+ * When the path does not match the `/p/` convention or the provider is unknown,
+ * falls back to the default target and preserves the original path.
+ *
+ * @param reqUrl - Incoming request URL from the client.
+ * @param routes - Provider-id → upstream base URL map.
+ * @param fallback - Default upstream when routing does not apply.
+ * @returns Parsed upstream target plus the full path used for logging and forwarding.
+ */
 function resolveRouteTarget(
 	reqUrl: string | undefined,
 	routes: Record<string, string> | undefined,
@@ -88,6 +144,7 @@ function resolveRouteTarget(
 		return { ...fallback, upstreamDisplayPath };
 	}
 
+	// OpenCode encodes provider selection in the path: /p/{providerId}/remainder
 	const match = reqUrl.match(/^\/p\/([^/]+)(\/.*)?$/);
 	if (!match) {
 		const upstreamDisplayPath = `${fallback.pathPrefix}${reqUrl}`;
@@ -111,6 +168,12 @@ function resolveRouteTarget(
 	};
 }
 
+/**
+ * Extracts the `model` field from a JSON request body.
+ *
+ * @param requestBody - Raw request body string.
+ * @returns Model identifier or `null` when absent or unparseable.
+ */
 function extractModelFromBody(requestBody: string): string | null {
 	if (!requestBody) {
 		return null;
@@ -124,6 +187,18 @@ function extractModelFromBody(requestBody: string): string | null {
 	}
 }
 
+/**
+ * Resolves upstream target based on the `model` field in the request body.
+ *
+ * Used by OpenCode when `modelRoutes` is configured. Returns `null` when the
+ * model cannot be extracted or is not registered in the route table.
+ *
+ * @param reqUrl - Incoming request URL (path may be normalized for the provider).
+ * @param requestBody - Raw JSON request body.
+ * @param modelRoutes - Model name → route metadata map.
+ * @param fallback - Default upstream when model routing fails.
+ * @returns Routed target with optional {@link ModelRoute} metadata, or `null`.
+ */
 function resolveModelTarget(
 	reqUrl: string | undefined,
 	requestBody: string,
@@ -143,6 +218,7 @@ function resolveModelTarget(
 
 	const target = parseTargetBaseUrl(modelRoute.upstreamBaseUrl);
 	const [rawPath, query = ""] = (reqUrl || "/").split("?");
+	// Adjust path for provider-specific API conventions (e.g. /messages → /v1/messages).
 	const urlPath = normalizeUpstreamPath(rawPath, modelRoute, target.pathPrefix);
 	const upstreamDisplayPath = `${target.pathPrefix}${urlPath}${query ? `?${query}` : ""}`;
 
@@ -157,15 +233,32 @@ function resolveModelTarget(
 	};
 }
 
+/**
+ * HTTP reverse proxy that intercepts, logs, and forwards LLM API traffic.
+ *
+ * Supports three routing modes:
+ * - **Default**: single `targetBaseUrl` (Claude Code V2+).
+ * - **OpenCode**: `modelRoutes` and/or `routes` for multi-provider routing.
+ * - **Codex**: `providerRoutes` for path-based upstream selection.
+ */
 export class ReverseProxyServer {
+	/** Active Node HTTP server, or `null` after {@link stop}. */
 	private server: http.Server | null = null;
+	/** In-memory aggregate of all logged request/response pairs. */
 	private pairs: RawPair[] = [];
+	/** Guards against duplicate cleanup when {@link stop} is called more than once. */
 	private stopped = false;
+	/** Default upstream protocol from config `targetBaseUrl`. */
 	private readonly targetProtocol: string;
+	/** Default upstream hostname from config `targetBaseUrl`. */
 	private readonly targetHost: string;
+	/** Default upstream port from config `targetBaseUrl`. */
 	private readonly targetPort: number;
+	/** Default upstream path prefix from config `targetBaseUrl`. */
 	private readonly pathPrefix: string;
+	/** Whether the default upstream uses TLS. */
 	private readonly useHttps: boolean;
+	/** Resolved logging and listen options with defaults applied. */
 	private readonly config: Required<
 		Pick<
 			ReverseProxyConfig,
@@ -177,15 +270,28 @@ export class ReverseProxyServer {
 			| "logSensitiveHeaders"
 		>
 	>;
+	/** Append-only JSONL log file path. */
 	private readonly logFile: string;
+	/** Pretty-printed JSON array mirror of `pairs`. */
 	private readonly jsonFile: string;
+	/** Self-contained HTML report output path. */
 	private readonly htmlFile: string;
+	/** Frontend bundle renderer for HTML reports. */
 	private readonly htmlGenerator: HTMLGenerator;
+	/** Tool label embedded in generated HTML (`claude`, `opencode`, `codex`). */
 	private readonly tool?: string;
+	/** OpenCode provider-id routing table (`/p/{id}/...` paths). */
 	private readonly routes?: Record<string, string>;
+	/** OpenCode model-based routing table. */
 	private readonly modelRoutes?: Record<string, ModelRoute>;
+	/** Codex path-prefix routing table. */
 	private readonly providerRoutes?: ProviderRoute[];
 
+	/**
+	 * Creates a new reverse proxy instance and initializes empty log files.
+	 *
+	 * @param config - Proxy and logging configuration.
+	 */
 	constructor(config: ReverseProxyConfig = {}) {
 		const target = parseTargetBaseUrl(config.targetBaseUrl);
 		this.targetProtocol = target.protocol;
@@ -224,6 +330,15 @@ export class ReverseProxyServer {
 		this.htmlGenerator = new HTMLGenerator();
 	}
 
+	/**
+	 * Converts Node HTTP headers to a flat string map, optionally redacting secrets.
+	 *
+	 * Sensitive keys (authorization, cookies, etc.) are truncated to show only
+	 * prefix/suffix unless `logSensitiveHeaders` is enabled.
+	 *
+	 * @param headers - Raw Node `IncomingHttpHeaders` from request or response.
+	 * @returns Flat string map safe for JSON serialization.
+	 */
 	private processHeaders(headers: IncomingHttpHeaders): Record<string, string> {
 		const result: Record<string, string> = {};
 		const sensitiveKeys = ["authorization", "x-api-key", "x-auth-token", "cookie", "set-cookie"];
@@ -237,6 +352,7 @@ export class ReverseProxyServer {
 			} else {
 				const lowerKey = key.toLowerCase();
 				if (sensitiveKeys.some((s) => lowerKey.includes(s))) {
+					// Partial redaction preserves enough context for debugging without leaking full tokens.
 					if (strValue.length > 14) {
 						result[key] = `${strValue.substring(0, 10)}...${strValue.slice(-4)}`;
 					} else if (strValue.length > 4) {
@@ -253,6 +369,15 @@ export class ReverseProxyServer {
 		return result;
 	}
 
+	/**
+	 * Parses a Server-Sent Events (SSE) response body into structured events.
+	 *
+	 * Handles both Anthropic-style (`event:` + `data:`) and OpenAI-style
+	 * (type embedded in JSON data) event formats.
+	 *
+	 * @param body - Decompressed SSE text from the upstream response.
+	 * @returns Ordered list of parsed events with ISO timestamps.
+	 */
 	private parseSSEEvents(body: string): SSEEvent[] {
 		const events: SSEEvent[] = [];
 		const lines = body.split("\n");
@@ -266,6 +391,7 @@ export class ReverseProxyServer {
 				if (data === "[DONE]") break;
 				try {
 					const parsed: unknown = JSON.parse(data);
+					// Fall back to JSON `type` field when no explicit `event:` line was seen.
 					const eventType =
 						currentEvent ||
 						(typeof parsed === "object" && parsed !== null && "type" in parsed
@@ -277,7 +403,7 @@ export class ReverseProxyServer {
 						timestamp: new Date().toISOString(),
 					});
 				} catch {
-					// Skip unparseable events
+					// Skip unparseable SSE data lines rather than failing the whole response log.
 				}
 			}
 		}
@@ -285,6 +411,7 @@ export class ReverseProxyServer {
 		return events;
 	}
 
+	/** Appends a request/response pair to JSONL and rewrites the aggregate JSON file. */
 	private writePairToLog(pair: RawPair): void {
 		try {
 			const jsonLine = JSON.stringify(pair) + "\n";
@@ -295,6 +422,7 @@ export class ReverseProxyServer {
 		}
 	}
 
+	/** Regenerates the self-contained HTML report from all logged pairs. */
 	private async generateHTML(): Promise<void> {
 		try {
 			await this.htmlGenerator.generateHTML(this.pairs, this.htmlFile, {
@@ -307,6 +435,11 @@ export class ReverseProxyServer {
 		}
 	}
 
+	/**
+	 * Starts the proxy server on 127.0.0.1.
+	 *
+	 * @returns Resolved listen port and base URL (`http://127.0.0.1:{port}`).
+	 */
 	async start(): Promise<ProxyInfo> {
 		return new Promise((resolve, reject) => {
 			const httpServer = http.createServer((req, res) => {
@@ -319,6 +452,7 @@ export class ReverseProxyServer {
 				reject(err);
 			});
 
+			// Bind to loopback only — the proxy must not be reachable from the network.
 			httpServer.listen(this.config.port, "127.0.0.1", () => {
 				const address = httpServer.address();
 				if (address && typeof address === "object") {
@@ -336,6 +470,17 @@ export class ReverseProxyServer {
 		});
 	}
 
+	/**
+	 * Handles a single incoming HTTP request: route, forward, stream response, and log.
+	 *
+	 * Routing priority:
+	 * 1. Model-based (OpenCode `modelRoutes`) — fails with 502 if model is unresolvable.
+	 * 2. Provider-prefixed (`/p/{id}/...`) or default target.
+	 * 3. Codex path-based (`providerRoutes`) overrides when `tool === "codex"`.
+	 *
+	 * @param req - Incoming client request from the coding agent.
+	 * @param res - Response object streamed back to the client.
+	 */
 	private handleRequest(req: IncomingMessage, res: ServerResponse): void {
 		const requestTimestamp = Date.now();
 		let requestBody = "";
@@ -357,6 +502,7 @@ export class ReverseProxyServer {
 					? resolveModelTarget(req.url, requestBody, this.modelRoutes, fallback)
 					: null;
 
+			// OpenCode requires every request to resolve to a known model when modelRoutes is set.
 			if (this.modelRoutes && Object.keys(this.modelRoutes).length > 0 && !modelTarget) {
 				res.writeHead(502);
 				res.end("opencode-trace: could not resolve model from request body");
@@ -367,6 +513,7 @@ export class ReverseProxyServer {
 				modelTarget ??
 				resolveRouteTarget(req.url, this.routes, fallback);
 
+			// Codex uses path-prefix routing instead of model-based routing.
 			if (this.tool === "codex" && this.providerRoutes?.length) {
 				routeTarget = resolveCodexRouteTarget(req.url, this.providerRoutes, fallback);
 			}
@@ -382,6 +529,7 @@ export class ReverseProxyServer {
 				method: req.method,
 				headers: {
 					...req.headers,
+					// Override Host so upstream TLS SNI and virtual-host routing match the target.
 					host: routeTarget.targetHost,
 				},
 			};
@@ -391,6 +539,7 @@ export class ReverseProxyServer {
 				const responseTimestamp = Date.now();
 				const responseChunks: Buffer[] = [];
 
+				// Stream response to client immediately while buffering for logging.
 				res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
 
 				proxyRes.on("data", (chunk: Buffer | string) => {
@@ -430,6 +579,22 @@ export class ReverseProxyServer {
 		});
 	}
 
+	/**
+	 * Parses, normalizes, and persists a completed request/response exchange.
+	 *
+	 * Decompresses gzip/brotli/deflate bodies before parsing. Converts OpenAI and
+	 * Anthropic streaming responses into structured message objects when possible.
+	 *
+	 * @param req - Original client request (used for URL and method).
+	 * @param proxyRes - Upstream response headers and status.
+	 * @param requestTimestamp - Client request start time in milliseconds.
+	 * @param responseTimestamp - Upstream response completion time in milliseconds.
+	 * @param requestBody - Buffered raw request body string.
+	 * @param responseChunks - Buffered raw response body chunks.
+	 * @param upstreamUrl - Fully resolved upstream URL for logging.
+	 * @param modelRouted - Whether model-based routing was used (forces logging).
+	 * @param modelRoute - Resolved model route metadata, if any.
+	 */
 	private async logResponse(
 		req: IncomingMessage,
 		proxyRes: IncomingMessage,
@@ -461,6 +626,7 @@ export class ReverseProxyServer {
 		let responseBody: string;
 		const contentEncoding = (proxyRes.headers["content-encoding"] || "").toLowerCase();
 
+		// Upstream may compress responses even though we proxy as plain HTTP locally.
 		try {
 			if (contentEncoding === "gzip") {
 				responseBody = zlib.gunzipSync(rawBuffer).toString("utf-8");
@@ -503,6 +669,16 @@ export class ReverseProxyServer {
 		}
 	}
 
+	/**
+	 * Determines the API format for response parsing.
+	 *
+	 * Priority: explicit model route → request path heuristics → upstream URL heuristics.
+	 *
+	 * @param reqUrl - Client-facing request URL path.
+	 * @param upstreamUrl - Resolved upstream URL after routing.
+	 * @param modelRoute - Optional model route with explicit `apiFormat`.
+	 * @returns Best-effort API format for {@link parseResponseBody}.
+	 */
 	private resolveResponseApiFormat(
 		reqUrl: string | undefined,
 		upstreamUrl: string,
@@ -518,6 +694,18 @@ export class ReverseProxyServer {
 		return inferApiFormatFromUrl(upstreamUrl);
 	}
 
+	/**
+	 * Parses a response body into structured log fields based on content type and API format.
+	 *
+	 * For SSE streams, attempts to reconstruct complete message objects from event
+	 * sequences; falls back to raw body text when parsing fails.
+	 *
+	 * @param proxyRes - Upstream response (for `content-type` header).
+	 * @param responseBody - Decompressed response text.
+	 * @param apiFormat - Resolved format from {@link resolveResponseApiFormat}.
+	 * @param requestBody - Parsed request body (used to extract model name).
+	 * @returns Subset of {@link RawPair.response} fields (`body`, `body_raw`, `events`).
+	 */
 	private parseResponseBody(
 		proxyRes: IncomingMessage,
 		responseBody: string,
@@ -563,6 +751,7 @@ export class ReverseProxyServer {
 					}
 				}
 
+				// Default SSE path: Anthropic Messages API streaming format.
 				const processor = new SharedConversationProcessor();
 				try {
 					const message: Message = processor.parseStreamingResponse(responseBody);
@@ -578,6 +767,9 @@ export class ReverseProxyServer {
 		}
 	}
 
+	/**
+	 * Stops the proxy server, prints summary stats, and optionally opens the HTML report.
+	 */
 	stop(): void {
 		if (this.stopped) {
 			return;
@@ -596,10 +788,12 @@ export class ReverseProxyServer {
 		}
 	}
 
+	/** Returns the absolute path to the generated HTML report file. */
 	getHtmlFile(): string {
 		return this.htmlFile;
 	}
 
+	/** Opens an HTML file in the platform default browser (Windows/macOS/Linux). */
 	private openHtmlInBrowser(htmlFile: string): void {
 		try {
 			if (process.platform === "win32") {

@@ -1,3 +1,24 @@
+/**
+ * @file openai-adapter.test.ts
+ *
+ * Unit tests for OpenAI ↔ Anthropic format conversion in `openai-adapter.ts`.
+ *
+ * The reverse proxy intercepts provider-native request/response bodies. For
+ * unified logging and HTML report rendering, non-Anthropic traffic (OpenCode
+ * OpenAI-compatible providers, Codex OpenAI Responses API) is normalized into
+ * Anthropic Messages shape so the shared conversation processor can parse all
+ * traffic through one code path.
+ *
+ * This suite covers:
+ * - OpenAI Chat Completions request normalization (`normalizeOpenAIChatRequest`)
+ * - Non-streaming completion response parsing (`parseOpenAIChatCompletionBody`)
+ * - OpenAI Responses API / Codex request shape (`normalizeOpenAIResponsesRequest`)
+ * - SSE stream reassembly into a synthetic non-streaming body (`buildOpenAIChatCompletionFromSSE`)
+ *
+ * @see ../src/openai-adapter.ts — format conversion implementation
+ * @see ../src/shared-conversation-processor.ts — consumer of normalized message shapes
+ */
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -7,7 +28,16 @@ import {
 	parseOpenAIChatCompletionBody,
 } from "../src/openai-adapter";
 
+/**
+ * Tests inbound OpenAI Chat Completions JSON → Anthropic Messages request shape.
+ *
+ * Covers role mapping, system message extraction, and tool call conversion.
+ */
 describe("normalizeOpenAIChatRequest", () => {
+	/**
+	 * A leading `system` role message should be lifted to the top-level `system`
+	 * field; remaining user messages should be preserved in `messages`.
+	 */
 	it("extracts system message and maps user content", () => {
 		const request = normalizeOpenAIChatRequest({
 			model: "deepseek-chat",
@@ -23,6 +53,10 @@ describe("normalizeOpenAIChatRequest", () => {
 		assert.equal(request.messages[0].role, "user");
 	});
 
+	/**
+	 * Assistant messages with OpenAI `tool_calls` arrays should become Anthropic
+	 * `tool_use` content blocks with preserved function name and arguments.
+	 */
 	it("maps assistant tool_calls to tool_use blocks", () => {
 		const request = normalizeOpenAIChatRequest({
 			model: "gpt-4.1",
@@ -48,7 +82,16 @@ describe("normalizeOpenAIChatRequest", () => {
 	});
 });
 
+/**
+ * Tests non-streaming OpenAI Chat Completions JSON → Anthropic assistant message.
+ *
+ * Verifies text content, finish reason, and token usage field mapping.
+ */
 describe("parseOpenAIChatCompletionBody", () => {
+	/**
+	 * A standard non-streaming completion should map choice text, finish reason,
+	 * and `usage` token counts to Anthropic message and usage fields.
+	 */
 	it("maps non-streaming completion to Anthropic message", () => {
 		const message = parseOpenAIChatCompletionBody(
 			{
@@ -73,7 +116,17 @@ describe("parseOpenAIChatCompletionBody", () => {
 	});
 });
 
+/**
+ * Tests OpenAI Responses API (Codex) request JSON → Anthropic Messages shape.
+ *
+ * Codex uses a different request schema (`instructions`, `input`, flat `tools`)
+ * than Chat Completions; normalization must handle both.
+ */
 describe("normalizeOpenAIResponsesRequest", () => {
+	/**
+	 * Codex flat tool definitions and `input_text` content blocks should
+	 * normalize to Anthropic `tools` and user message text content.
+	 */
 	it("parses Codex flat tools and input_text content", () => {
 		const request = normalizeOpenAIResponsesRequest({
 			model: "deepseek-v4-flash",
@@ -105,7 +158,15 @@ describe("normalizeOpenAIResponsesRequest", () => {
 	});
 });
 
+/**
+ * Tests reassembly of OpenAI Chat Completions SSE chunks into a synthetic
+ * non-streaming completion body suitable for logging and report parsing.
+ */
 describe("buildOpenAIChatCompletionFromSSE", () => {
+	/**
+	 * Incremental `delta.content` fragments across multiple SSE `data:` lines
+	 * should concatenate into the full assistant message text.
+	 */
 	it("accumulates streaming text deltas", () => {
 		const sse = [
 			"data: {\"id\":\"cmpl-1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}",

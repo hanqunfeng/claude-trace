@@ -1,16 +1,25 @@
+/**
+ * @file JSON debug view for processed API pairs.
+ *
+ * Renders each normalized request/response pair as collapsible pretty-printed
+ * JSON, including a note when the response was reconstructed from SSE streams.
+ */
+
 import { LitElement, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { ProcessedPair } from "../../../src/shared-conversation-processor";
 
+/** Expandable JSON dump of {@link ProcessedPair} request and response bodies. */
 @customElement("json-view")
 export class JsonView extends LitElement {
 	@property({ type: Array }) processedPairs: ProcessedPair[] = [];
 
-	// Disable shadow DOM to use global CSS
+	/** Light DOM so global Tailwind classes apply. */
 	createRenderRoot() {
 		return this;
 	}
 
+	/** Renders collapsible request/response JSON sections for each processed pair. */
 	render() {
 		if (this.processedPairs.length === 0) {
 			return html`<div class="text-vs-muted">No processed pairs found.</div>`;
@@ -70,6 +79,7 @@ export class JsonView extends LitElement {
 		`;
 	}
 
+	/** Pretty-prints an object; returns an error string on circular references. */
 	private formatJson(obj: any): string {
 		try {
 			return JSON.stringify(obj, null, 2);
@@ -78,6 +88,7 @@ export class JsonView extends LitElement {
 		}
 	}
 
+	/** Toggles the collapsible section immediately following the clicked header. */
 	private toggleContent(e: Event) {
 		const header = e.currentTarget as HTMLElement;
 		const content = header.nextElementSibling as HTMLElement;

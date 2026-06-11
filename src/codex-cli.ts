@@ -1,5 +1,27 @@
 #!/usr/bin/env node
 
+/**
+ * @file codex-cli.ts
+ * @description Entry point for the `codex-trace` command.
+ *
+ * Thin CLI wrapper that parses arguments, dispatches to utility modes
+ * (HTML generation, index building), or delegates interactive tracing to
+ * `trace-runner.ts` via the Codex CLI tool profile.
+ *
+ * Architecture:
+ * ```
+ * codex-cli.ts → codexProfile (tools/codex.ts) → trace-runner.ts
+ *                                                  └─ reverse-proxy.ts (always)
+ * ```
+ *
+ * Codex is a Rust native binary — always uses reverse-proxy interception with
+ * a `$CODEX_HOME` config overlay that rewrites upstream base URLs. Path-based
+ * routing in `codex-routing.ts` dispatches OpenAI API Key vs ChatGPT OAuth
+ * traffic to the correct upstream.
+ *
+ * Registered as the `codex-trace` bin in package.json.
+ */
+
 import { codexProfile } from "./tools/codex";
 import { runWithTracing } from "./trace-runner";
 import {
@@ -11,6 +33,12 @@ import {
 	generateIndex,
 } from "./cli-common";
 
+/**
+ * Print usage help for all `codex-trace` modes and options to stdout.
+ *
+ * Documents Codex-specific config discovery (`CODEX_HOME`, `config.toml`)
+ * and the overlay-based interception approach.
+ */
 function showHelp(): void {
 	console.log(`
 ${colors.blue}Codex Trace${colors.reset}
@@ -72,6 +100,17 @@ For more information, visit: https://github.com/hanqunfeng/claude-trace
 `);
 }
 
+/**
+ * Main CLI dispatcher.
+ *
+ * Modes are mutually exclusive and checked in priority order:
+ * 1. `--help` / `-h` — print usage and exit
+ * 2. `--generate-html` — offline HTML report from an existing JSONL log
+ * 3. `--index` — rebuild conversation summaries in `.codex-trace/`
+ * 4. Default — launch Codex with live traffic tracing via `runWithTracing`
+ *
+ * Arguments after `--run-with` are passed verbatim to the Codex child process.
+ */
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	const { traceArgs, toolArgs, includeAllRequests, openInBrowser, logSensitiveHeaders, logBaseName } =
@@ -82,6 +121,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	}
 
+	// `--codex-path` takes the next positional arg as the binary location.
 	let customCodexPath: string | undefined;
 	const codexPathIndex = traceArgs.indexOf("--codex-path");
 	if (codexPathIndex !== -1 && traceArgs[codexPathIndex + 1]) {
@@ -106,6 +146,7 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// Default mode: start reverse proxy + spawn Codex with $CODEX_HOME overlay.
 	await runWithTracing(codexProfile, toolArgs, {
 		includeAllRequests,
 		openInBrowser,
