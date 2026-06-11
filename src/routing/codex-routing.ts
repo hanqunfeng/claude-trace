@@ -9,7 +9,7 @@
  * {@link ProviderRoute.matchPathPrefixes} and forwards to the appropriate upstream base URL.
  */
 
-import type { ProviderRoute } from "./tools/types";
+import type { ProviderRoute } from "../tools/types";
 
 /** Parsed components of an upstream base URL used to build outbound requests. */
 interface ParsedTarget {

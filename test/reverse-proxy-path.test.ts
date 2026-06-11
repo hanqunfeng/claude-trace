@@ -12,12 +12,12 @@
  * `/v1/v1/chat/completions` or missing version prefixes on Anthropic routes.
  *
  * @see ../src/proxy-routing.ts — `normalizeUpstreamPath`
- * @see ../src/reverse-proxy.ts — consumer of path normalization during proxy forwarding
+ * @see ../src/intercept/reverse-proxy.ts — consumer of path normalization during proxy forwarding
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { normalizeUpstreamPath } from "../src/proxy-routing";
+import { normalizeUpstreamPath } from "../src/routing/proxy-routing";
 import type { ModelRoute } from "../src/tools/types";
 
 /**

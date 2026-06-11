@@ -10,7 +10,7 @@ Read `README.md` at the start of a session for user-facing usage, troubleshootin
 - Edit **`src/` only**; rebuild before running `dist/`. `fix/` is reference only.
 - After interception, routing, HTML, or parsing changes: `npm run typecheck && npm run test:unit && npm run build`.
 - Do **not** enable `--include-sensitive-headers` in examples unless explicitly requested (logs auth tokens).
-- New tool = `src/tools/<name>.ts` + thin CLI entry + `package.json` bin.
+- New tool = `src/tools/<name>.ts` + thin CLI entry in `src/cli/` + `package.json` bin.
 - Node **>= 16** required (`package.json` engines).
 - **Every `.ts` file you create or materially edit** must follow [Code Comments](#code-comments) (English JSDoc + `@file` header). Touching a file only for typos/formatting does not require a full doc pass.
 
@@ -23,9 +23,9 @@ Read `README.md` at the start of a session for user-facing usage, troubleshootin
 All CLIs share the same core pipeline via **Tool Profiles**:
 
 ```
-cli.ts / opencode-cli.ts / codex-cli.ts  →  trace-runner.ts  →  reverse-proxy.ts / interceptor.ts
-                                              ↑
-                          tools/claude.ts | tools/opencode.ts | tools/codex.ts
+cli/cli.ts | opencode-cli.ts | codex-cli.ts  →  cli/trace-runner.ts  →  intercept/reverse-proxy.ts | intercept/interceptor.ts
+                                                    ↑
+                                tools/claude.ts | tools/opencode.ts | tools/codex.ts
 ```
 
 | Tool | CLI command | Log directory | Config injection |
@@ -34,48 +34,55 @@ cli.ts / opencode-cli.ts / codex-cli.ts  →  trace-runner.ts  →  reverse-prox
 | OpenCode | `opencode-trace` | `.opencode-trace/` | `OPENCODE_CONFIG_CONTENT` runtime override (original config never modified) |
 | Codex CLI | `codex-trace` | `.codex-trace/` | `CODEX_HOME` overlay with rewritten `config.toml` |
 
-**Data flow:** proxy/interceptor → JSONL in log dir → `shared-conversation-processor.ts` → HTML via `html-generator.ts` + `frontend/dist/index.global.js`.
+**Data flow:** proxy/interceptor → JSONL in log dir → `report/shared-conversation-processor.ts` → HTML via `report/html-generator.ts` + `frontend/dist/index.global.js`.
 
 ## Claude Code V2+ (Critical)
 
 Claude Code V2+ is a **native binary**, not Node.js. Do NOT launch it with `node --require interceptor claude` — that causes `SyntaxError: Invalid or unexpected token`.
 
-**Auto-detection in `src/tools/claude.ts` + `src/trace-runner.ts`:**
+**Auto-detection in `src/tools/claude.ts` + `src/cli/trace-runner.ts`:**
 
 1. `getBinaryPath()` — resolve real binary (handles bash wrappers, Homebrew Cask, Windows `.cmd`)
 2. `isNativeBinary()` — check ELF / Mach-O / PE magic bytes
-3. **Native binary** → reverse proxy via `src/reverse-proxy.ts`
-4. **Node.js script** → `interceptor-loader.js` + `spawn("node", ["--require", loader, jsPath, ...])`
+3. **Native binary** → reverse proxy via `src/intercept/reverse-proxy.ts`
+4. **Node.js script** → `intercept/interceptor-loader.js` + `spawn("node", ["--require", loader, jsPath, ...])`
 
-Proxy mode sets `ANTHROPIC_BASE_URL` to the local proxy. If `~/.claude/settings.json` defines its own `ANTHROPIC_BASE_URL` (CC-Switch, LiteLLM, corporate gateways, etc.), `src/claude-config-overlay.ts` builds a **persistent** overlay at `~/.claude-trace/claude-config-overlay/` (symlinks/junctions + rewritten `settings.json`; original settings never modified; reused across runs).
+Proxy mode sets `ANTHROPIC_BASE_URL` to the local proxy. If `~/.claude/settings.json` defines its own `ANTHROPIC_BASE_URL` (CC-Switch, LiteLLM, corporate gateways, etc.), `src/config/claude-config-overlay.ts` builds a **persistent** overlay at `~/.claude-trace/claude-config-overlay/` (symlinks/junctions + rewritten `settings.json`; original settings never modified; reused across runs).
 
 ## OpenCode
 
-OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config lookup: `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, `.opencode/opencode.json`. Runtime `OPENCODE_CONFIG_CONTENT` overrides all provider `baseURL` values. Model-based routing supports Anthropic (`@ai-sdk/anthropic`) and OpenAI (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) via `src/openai-adapter.ts` and `src/proxy-routing.ts`.
+OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config lookup: `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, `.opencode/opencode.json`. Runtime `OPENCODE_CONFIG_CONTENT` overrides all provider `baseURL` values. Model-based routing supports Anthropic (`@ai-sdk/anthropic`) and OpenAI (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) via `src/adapt/openai-adapter.ts` and `src/routing/proxy-routing.ts`.
 
 Proxy runtime errors append to `.opencode-trace/proxy-errors.log`. Verbose stderr routing logs: `OPENCODE_TRACE_DEBUG=1` (also used by shared `traceDebug()` for Claude overlay messages).
 
 ## Codex CLI
 
-Codex always uses **reverse proxy mode**. Config from `$CODEX_HOME/config.toml` (default `~/.codex/`). `src/codex-config-overlay.ts` builds a persistent overlay at `~/.claude-trace/codex-config-overlay/` rewriting `openai_base_url`, `chatgpt_base_url`, and `model_providers.*.base_url`. Path-based routing in `src/codex-routing.ts`: OpenAI API Key (`/v1/responses`) vs ChatGPT OAuth (`/backend-api/codex/responses`). Parsing via `src/openai-adapter.ts` (`openai-responses` format). WebSocket Responses disabled in overlay for MVP logging.
+Codex always uses **reverse proxy mode**. Config from `$CODEX_HOME/config.toml` (default `~/.codex/`). `src/config/codex-config-overlay.ts` builds a persistent overlay at `~/.claude-trace/codex-config-overlay/` rewriting `openai_base_url`, `chatgpt_base_url`, and `model_providers.*.base_url`. Path-based routing in `src/routing/codex-routing.ts`: OpenAI API Key (`/v1/responses`) vs ChatGPT OAuth (`/backend-api/codex/responses`). Parsing via `src/adapt/openai-adapter.ts` (`openai-responses` format). WebSocket Responses disabled in overlay for MVP logging.
 
 ## Directory Layout
 
 ```
 src/
-  cli.ts / opencode-cli.ts / codex-cli.ts   # thin CLI wrappers
   index.ts                                  # programmatic API (HTMLGenerator, interceptor exports)
-  cli-common.ts                             # shared arg parsing, HTML/index helpers
-  trace-runner.ts                           # launch + proxy/interceptor dispatch
-  claude-config-overlay.ts                  # Claude settings.json overlay
-  codex-config-overlay.ts / codex-routing.ts
-  reverse-proxy.ts                          # native binary reverse proxy
-  interceptor.ts                            # V1 fetch() hook (Claude only)
-  interceptor-loader.js / token-extractor.js  # copied to dist/ at build
-  html-generator.ts / index-generator.ts
-  shared-conversation-processor.ts          # shared parsing (frontend + backend)
-  openai-adapter.ts / api-format.ts / proxy-routing.ts
   types.ts
+  cli/
+    cli.ts / opencode-cli.ts / codex-cli.ts # thin CLI wrappers
+    cli-common.ts                           # shared arg parsing, HTML/index helpers
+    trace-runner.ts                         # launch + proxy/interceptor dispatch
+  intercept/
+    reverse-proxy.ts                        # native binary reverse proxy
+    interceptor.ts                          # V1 fetch() hook (Claude only)
+    interceptor-loader.js / token-extractor.js  # copied to dist/intercept/ at build
+  config/
+    claude-config-overlay.ts                # Claude settings.json overlay
+    codex-config-overlay.ts                 # Codex config.toml overlay
+  routing/
+    proxy-routing.ts / codex-routing.ts
+  adapt/
+    openai-adapter.ts / api-format.ts
+  report/
+    html-generator.ts / index-generator.ts
+    shared-conversation-processor.ts        # shared parsing (frontend + backend)
   tools/
     types.ts / binary-utils.ts
     claude.ts / opencode.ts / codex.ts
@@ -96,10 +103,10 @@ npm run dev          # watch: tsc + loader copy + frontend
 npm run typecheck    # tsc --noEmit
 npm run test:unit    # npx tsx --test test/*.test.ts
 npm run test:generate  # HTML preview from test-traffic.jsonl
-node dist/cli.js | node dist/opencode-cli.js | node dist/codex-cli.js
+node dist/cli/cli.js | node dist/cli/opencode-cli.js | node dist/cli/codex-cli.js
 ```
 
-**Important:** `tsc` only compiles `.ts`. `interceptor-loader.js` and `token-extractor.js` must be copied to `dist/` (handled by `build` and `predev`).
+**Important:** `tsc` only compiles `.ts`. `interceptor-loader.js` and `token-extractor.js` must be copied to `dist/intercept/` (handled by `build` and `predev`).
 
 | Area changed | Verify with |
 |--------------|---------------|
@@ -133,7 +140,7 @@ All comments are **English**. Apply whenever you **create** a `.ts` file or **ch
 | Area | Extra expectations |
 |------|-------------------|
 | `src/tools/*.ts` | Document `ToolProfile` methods, binary resolution, config overlay / env injection |
-| `src/reverse-proxy.ts`, `interceptor.ts` | Request filtering, routing priority, streaming/SSE handling |
+| `src/intercept/reverse-proxy.ts`, `src/intercept/interceptor.ts` | Request filtering, routing priority, streaming/SSE handling |
 | `frontend/src/**` | Lit components: document `render()`, non-trivial private helpers, XSS/sanitization |
 | `test/*.test.ts` | `@file` describing suite scope; brief `describe` / `it` intent; fixture constant purpose |
 
@@ -191,16 +198,16 @@ Full descriptions: see `README.md`.
 
 | Change affects | Files to touch |
 |----------------|----------------|
-| V2+ proxy logging | `src/reverse-proxy.ts`, possibly `src/types.ts` |
-| V1 fetch hook | `src/interceptor.ts`, `src/interceptor-loader.js` |
-| Binary detection / spawn | `src/trace-runner.ts`, `src/tools/*.ts` |
-| New coding tool | `src/tools/<tool>.ts`, new CLI entry, `package.json` bin |
-| HTML report rendering | `src/html-generator.ts`, `frontend/src/` |
-| Conversation parsing | `src/shared-conversation-processor.ts` |
+| V2+ proxy logging | `src/intercept/reverse-proxy.ts`, possibly `src/types.ts` |
+| V1 fetch hook | `src/intercept/interceptor.ts`, `src/intercept/interceptor-loader.js` |
+| Binary detection / spawn | `src/cli/trace-runner.ts`, `src/tools/*.ts` |
+| New coding tool | `src/tools/<tool>.ts`, new CLI entry in `src/cli/`, `package.json` bin |
+| HTML report rendering | `src/report/html-generator.ts`, `frontend/src/` |
+| Conversation parsing | `src/report/shared-conversation-processor.ts` |
 
 ## Common Pitfalls
 
-1. **Forgetting to build** before `node dist/cli.js` — `dist/interceptor-loader.js` won't exist
+1. **Forgetting to build** before `node dist/cli/cli.js` — `dist/intercept/interceptor-loader.js` won't exist
 2. **Frontend not built** — HTML generator needs `frontend/dist/index.global.js`
 3. **Assuming Claude is Node.js** — V2+ Homebrew/Cask installs are native binaries
 4. **Editing only `dist/`** — always change `src/` and rebuild

@@ -22,7 +22,7 @@
  * Registered as the `codex-trace` bin in package.json.
  */
 
-import { codexProfile } from "./tools/codex";
+import { codexProfile } from "../tools/codex";
 import { runWithTracing } from "./trace-runner";
 import {
 	colors,

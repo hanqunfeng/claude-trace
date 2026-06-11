@@ -15,8 +15,8 @@ import type {
 	ToolResultBlockParam,
 	ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages";
-import type { ApiFormat } from "./tools/types";
-import type { RawPair } from "./types";
+import type { ApiFormat } from "../tools/types";
+import type { RawPair } from "../types";
 import { detectApiFormat, inferApiFormatFromUrl } from "./api-format";
 
 /** OpenAI chat message shape (request or completion choice). */

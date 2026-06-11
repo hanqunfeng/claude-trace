@@ -21,7 +21,7 @@
  * Registered as the `opencode-trace` bin in package.json.
  */
 
-import { opencodeProfile } from "./tools/opencode";
+import { opencodeProfile } from "../tools/opencode";
 import { runWithTracing } from "./trace-runner";
 import {
 	colors,

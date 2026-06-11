@@ -49,7 +49,7 @@ cd claude-trace
 npm run setup   # installs root + frontend dependencies
 npm run build
 npm link        # optional: global `claude-trace`, `opencode-trace`, and `codex-trace`
-# Without link: node dist/cli.js / node dist/opencode-cli.js / node dist/codex-cli.js
+# Without link: node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js
 ```
 
 ## Claude Code (`claude-trace`)

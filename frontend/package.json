@@ -5,7 +5,7 @@
 	"scripts": {
 		"build:css": "npx tailwindcss -i src/styles.css -o dist/styles.css",
 		"build:js": "npx tsup",
-		"build:html": "cd .. && node dist/cli.js --generate-html test/test-traffic.jsonl test/index.html --no-open",
+		"build:html": "cd .. && node dist/cli/cli.js --generate-html test/test-traffic.jsonl test/index.html --no-open",
 		"build": "npm run build:css && npm run build:js",
 		"rebuild": "npm run build:css && npm run build:js && npm run build:html",
 		"dev": "npx concurrently \"npm run watch:src\" \"npm run serve\"",

@@ -17,7 +17,7 @@
  * sync, and partial overlay behavior when the source config directory is missing.
  *
  * @see ../src/claude-config-overlay.ts — overlay sync implementation
- * @see ../src/trace-runner.ts — selects overlay vs direct env injection at launch
+ * @see ../src/cli/trace-runner.ts — selects overlay vs direct env injection at launch
  */
 
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ import {
 	isPersistentOverlayDir,
 	syncClaudeConfigOverlay,
 	writeOverlaySettings,
-} from "../src/claude-config-overlay";
+} from "../src/config/claude-config-overlay";
 
 /**
  * End-to-end overlay behavior: persistent directory detection, settings rewrite,

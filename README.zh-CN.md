@@ -49,7 +49,7 @@ cd claude-trace
 npm run setup   # 安装根目录 + frontend 依赖
 npm run build
 npm link        # 可选：全局可用 claude-trace、opencode-trace 与 codex-trace
-# 不 link 则用 node dist/cli.js / node dist/opencode-cli.js / node dist/codex-cli.js
+# 不 link 则用 node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js
 ```
 
 ## Claude Code（`claude-trace`）

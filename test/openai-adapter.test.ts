@@ -15,7 +15,7 @@
  * - OpenAI Responses API / Codex request shape (`normalizeOpenAIResponsesRequest`)
  * - SSE stream reassembly into a synthetic non-streaming body (`buildOpenAIChatCompletionFromSSE`)
  *
- * @see ../src/openai-adapter.ts — format conversion implementation
+ * @see ../src/adapt/openai-adapter.ts — format conversion implementation
  * @see ../src/shared-conversation-processor.ts — consumer of normalized message shapes
  */
 
@@ -26,7 +26,7 @@ import {
 	normalizeOpenAIChatRequest,
 	normalizeOpenAIResponsesRequest,
 	parseOpenAIChatCompletionBody,
-} from "../src/openai-adapter";
+} from "../src/adapt/openai-adapter";
 
 /**
  * Tests inbound OpenAI Chat Completions JSON → Anthropic Messages request shape.

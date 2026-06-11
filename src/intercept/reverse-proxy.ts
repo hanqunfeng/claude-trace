@@ -14,20 +14,20 @@ import * as fs from "fs";
 import * as path from "path";
 import * as zlib from "zlib";
 import { spawn } from "child_process";
-import { traceDebug, traceRuntimeError } from "./cli-common";
-import { HTMLGenerator } from "./html-generator";
-import { SharedConversationProcessor } from "./shared-conversation-processor";
+import { traceDebug, traceRuntimeError } from "../cli/cli-common";
+import { HTMLGenerator } from "../report/html-generator";
+import { SharedConversationProcessor } from "../report/shared-conversation-processor";
 import {
 	buildOpenAIChatCompletionFromSSE,
 	buildOpenAIResponsesFromSSE,
 	parseOpenAIChatCompletionBody,
 	parseOpenAIResponsesBody,
-} from "./openai-adapter";
-import { inferApiFormatFromUrl } from "./api-format";
-import { resolveCodexRouteTarget } from "./codex-routing";
-import { normalizeUpstreamPath, resolveModelRoute, inferApiFormatFromPath } from "./proxy-routing";
-import type { RawPair, SSEEvent } from "./types";
-import type { ApiFormat, ModelRoute, ProviderRoute } from "./tools/types";
+} from "../adapt/openai-adapter";
+import { inferApiFormatFromUrl } from "../adapt/api-format";
+import { resolveCodexRouteTarget } from "../routing/codex-routing";
+import { normalizeUpstreamPath, resolveModelRoute, inferApiFormatFromPath } from "../routing/proxy-routing";
+import type { RawPair, SSEEvent } from "../types";
+import type { ApiFormat, ModelRoute, ProviderRoute } from "../tools/types";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 
 /** Configuration options for {@link ReverseProxyServer}. */

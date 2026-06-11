@@ -17,7 +17,7 @@ import type {
 	Message,
 	ToolUnion,
 } from "@anthropic-ai/sdk/resources/messages";
-import { SimpleConversation, EnhancedMessageParam } from "../../../src/shared-conversation-processor";
+import { SimpleConversation, EnhancedMessageParam } from "../../../src/report/shared-conversation-processor";
 import { markdownToHtml } from "../utils/markdown";
 
 /** Renders {@link SimpleConversation} threads in the main conversations tab. */

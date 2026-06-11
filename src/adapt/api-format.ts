@@ -7,8 +7,8 @@
  * URL paths, and JSON body shapes for viewer display and parsing decisions.
  */
 
-import type { ApiFormat } from "./tools/types";
-import type { RawPair } from "./types";
+import type { ApiFormat } from "../tools/types";
+import type { RawPair } from "../types";
 
 /**
  * Infer API format from an OpenCode provider npm package name.

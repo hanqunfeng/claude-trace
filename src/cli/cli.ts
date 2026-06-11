@@ -21,7 +21,7 @@
  * Registered as the `claude-trace` bin in package.json.
  */
 
-import { claudeProfile, extractClaudeToken } from "./tools/claude";
+import { claudeProfile, extractClaudeToken } from "../tools/claude";
 import { runWithTracing } from "./trace-runner";
 import {
 	colors,

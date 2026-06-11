@@ -12,17 +12,17 @@
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { ReverseProxyServer } from "./reverse-proxy";
-import type { ToolProfile, TraceOptions } from "./tools/types";
-import { isNativeBinary, resolveToJsFile } from "./tools/binary-utils";
-import { isPersistentOverlayDir } from "./claude-config-overlay";
-import { isPersistentCodexOverlayDir } from "./codex-config-overlay";
-import type { ProviderRoute } from "./tools/types";
+import { ReverseProxyServer } from "../intercept/reverse-proxy";
+import type { ToolProfile, TraceOptions } from "../tools/types";
+import { isNativeBinary, resolveToJsFile } from "../tools/binary-utils";
+import { isPersistentOverlayDir } from "../config/claude-config-overlay";
+import { isPersistentCodexOverlayDir } from "../config/codex-config-overlay";
+import type { ProviderRoute } from "../tools/types";
 import { log } from "./cli-common";
 
-/** Resolve path to interceptor-loader.js copied into dist/ at build time. */
+/** Resolve path to interceptor-loader.js copied into dist/intercept/ at build time. */
 function getLoaderPath(): string {
-	const loaderPath = path.join(__dirname, "interceptor-loader.js");
+	const loaderPath = path.join(__dirname, "..", "intercept", "interceptor-loader.js");
 
 	if (!fs.existsSync(loaderPath)) {
 		log(`Interceptor loader not found at: ${loaderPath}`, "red");

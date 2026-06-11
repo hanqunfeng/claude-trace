@@ -39,9 +39,9 @@ import {
 	RESERVED_BUILTIN_PROVIDERS,
 	type CodexConfig,
 	type CodexModelProvider,
-} from "../codex-config-overlay";
+} from "../config/codex-config-overlay";
 import { isNativeBinary } from "./binary-utils";
-import { log } from "../cli-common";
+import { log } from "../cli/cli-common";
 
 /** Default upstream for OpenAI API Key auth (`/v1/responses`). */
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";

@@ -121,7 +121,7 @@ run_checks() {
 	npm run build
 
 	log "验证 CLI..."
-	node dist/cli.js --help >/dev/null
+	node dist/cli/cli.js --help >/dev/null
 
 	log "预览发布包..."
 	npm pack --dry-run

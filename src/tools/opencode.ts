@@ -28,9 +28,9 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import type { ApiFormat, ModelRoute, ProviderRoute, ToolProfile } from "./types";
-import { inferApiFormatFromNpm } from "../api-format";
+import { inferApiFormatFromNpm } from "../adapt/api-format";
 import { isNativeBinary } from "./binary-utils";
-import { log } from "../cli-common";
+import { log } from "../cli/cli-common";
 
 /** Per-model entry inside an OpenCode provider block. */
 interface OpenCodeModelConfig {

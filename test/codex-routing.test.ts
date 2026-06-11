@@ -26,13 +26,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { resolveCodexRouteTarget } from "../src/codex-routing";
+import { resolveCodexRouteTarget } from "../src/routing/codex-routing";
 import {
 	listRoutesFromCodexConfig,
 	buildCodexModelRouteMap,
 	type CodexConfig,
 } from "../src/tools/codex";
-import { readCodexConfig, syncCodexConfigOverlay } from "../src/codex-config-overlay";
+import { readCodexConfig, syncCodexConfigOverlay } from "../src/config/codex-config-overlay";
 import { parse, stringify } from "smol-toml";
 
 /**

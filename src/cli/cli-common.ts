@@ -9,7 +9,7 @@
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { HTMLGenerator } from "./html-generator";
+import { HTMLGenerator } from "../report/html-generator";
 
 /** ANSI escape codes for terminal-colored log output. */
 export const colors = {
@@ -169,7 +169,7 @@ export async function generateHTMLFromCLI(
  */
 export async function generateIndex(traceDir: string): Promise<void> {
 	try {
-		const { IndexGenerator } = await import("./index-generator");
+		const { IndexGenerator } = await import("../report/index-generator");
 		const indexGenerator = new IndexGenerator(traceDir);
 		await indexGenerator.generateIndex();
 		process.exit(0);

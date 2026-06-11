@@ -32,9 +32,9 @@ import {
 	resolveUserClaudeConfigDir,
 	syncClaudeConfigOverlay,
 	writeOverlaySettings,
-} from "../claude-config-overlay";
+} from "../config/claude-config-overlay";
 import { isNativeBinary, resolveToJsFile } from "./binary-utils";
-import { log, traceDebug } from "../cli-common";
+import { log, traceDebug } from "../cli/cli-common";
 
 /**
  * Locate the Claude CLI executable on PATH or in common install locations.
@@ -366,7 +366,7 @@ export async function extractClaudeToken(customClaudePath?: string): Promise<voi
 	}
 
 	const tokenFile = path.join(claudeTraceDir, "token.txt");
-	const tokenExtractorPath = path.join(__dirname, "..", "token-extractor.js");
+	const tokenExtractorPath = path.join(__dirname, "..", "intercept", "token-extractor.js");
 
 	if (!fs.existsSync(tokenExtractorPath)) {
 		log(`Token extractor not found at: ${tokenExtractorPath}`, "red");

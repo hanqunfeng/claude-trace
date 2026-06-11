@@ -8,11 +8,11 @@
  */
 
 // Main exports for the package
-export { ClaudeTrafficLogger, initializeInterceptor, getLogger, InterceptorConfig } from "./interceptor";
-export { HTMLGenerator } from "./html-generator";
+export { ClaudeTrafficLogger, initializeInterceptor, getLogger, InterceptorConfig } from "./intercept/interceptor";
+export { HTMLGenerator } from "./report/html-generator";
 export { RawPair, ClaudeData, HTMLGenerationData, TemplateReplacements } from "./types";
 
 // Re-export everything for convenience
-export * from "./interceptor";
-export * from "./html-generator";
+export * from "./intercept/interceptor";
+export * from "./report/html-generator";
 export * from "./types";

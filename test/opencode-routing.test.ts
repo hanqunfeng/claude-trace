@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildModelRouteMap, inferApiFormat } from "../src/tools/opencode";
-import { resolveModelRoute } from "../src/proxy-routing";
+import { resolveModelRoute } from "../src/routing/proxy-routing";
 
 /**
  * Tests mapping from `@ai-sdk/*` npm package names to internal API format enums.

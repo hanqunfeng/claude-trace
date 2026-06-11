@@ -10,7 +10,7 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { HTMLGenerator } from "./html-generator";
-import { RawPair } from "./types";
+import { RawPair } from "../types";
 import {
 	SharedConversationProcessor,
 	SimpleConversation,

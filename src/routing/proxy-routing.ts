@@ -7,7 +7,7 @@
  * infers API format from URL paths for response parsing.
  */
 
-import type { ApiFormat, ModelRoute } from "./tools/types";
+import type { ApiFormat, ModelRoute } from "../tools/types";
 
 /**
  * Resolves the upstream route for a given model identifier.

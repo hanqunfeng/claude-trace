@@ -97,7 +97,7 @@ npm run typecheck
 npm run build
 
 # 本地试跑
-node dist/cli.js --help
+node dist/cli/cli.js --help
 ```
 
 ### 2. 更新版本号

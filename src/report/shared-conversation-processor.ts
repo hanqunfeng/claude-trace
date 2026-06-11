@@ -22,15 +22,15 @@ import type {
     ThinkingBlock,
     ToolUseBlock as ToolUseBlockType,
 } from "@anthropic-ai/sdk/resources/messages";
-import type { ApiFormat } from "./tools/types";
-import type { RawPair, BedrockInvocationMetrics } from "./types";
-import { formatApiFormatsDisplay } from "./api-format";
+import type { ApiFormat } from "../tools/types";
+import type { RawPair, BedrockInvocationMetrics } from "../types";
+import { formatApiFormatsDisplay } from "../adapt/api-format";
 import {
     extractModelFromPair,
     normalizeOpenAIRequest,
     parseOpenAIResponse,
     resolvePairApiFormat,
-} from "./openai-adapter";
+} from "../adapt/openai-adapter";
 
 /** A single logged API round-trip normalized for display and grouping. */
 export interface ProcessedPair {

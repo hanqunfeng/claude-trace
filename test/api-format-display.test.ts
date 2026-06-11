@@ -11,12 +11,12 @@
  * Anthropic Messages)" when a conversation spans multiple provider formats.
  *
  * @see ../src/api-format.ts — label formatting helpers
- * @see ../src/html-generator.ts — consumer of format display strings
+ * @see ../src/report/html-generator.ts — consumer of format display strings
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatApiFormatLabel, formatApiFormatsDisplay } from "../src/api-format";
+import { formatApiFormatLabel, formatApiFormatsDisplay } from "../src/adapt/api-format";
 
 /**
  * Tests mapping from internal `apiFormat` enum values to stable display strings.

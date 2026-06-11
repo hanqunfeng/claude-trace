@@ -7,7 +7,7 @@
 
 import { LitElement, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { ProcessedPair } from "../../../src/shared-conversation-processor";
+import { ProcessedPair } from "../../../src/report/shared-conversation-processor";
 
 /** Expandable JSON dump of {@link ProcessedPair} request and response bodies. */
 @customElement("json-view")

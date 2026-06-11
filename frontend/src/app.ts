@@ -13,7 +13,7 @@ import {
 	SharedConversationProcessor,
 	SimpleConversation,
 	ProcessedPair,
-} from "../../src/shared-conversation-processor";
+} from "../../src/report/shared-conversation-processor";
 
 /** Top-level trace viewer shell mounted on `#app` in generated HTML reports. */
 @customElement("claude-app")

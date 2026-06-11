@@ -8,7 +8,7 @@
 
 import fs from "fs";
 import path from "path";
-import { RawPair, ClaudeData, HTMLGenerationData } from "./types";
+import { RawPair, ClaudeData, HTMLGenerationData } from "../types";
 
 /**
  * Builds self-contained HTML trace reports from raw API request/response pairs.
@@ -26,7 +26,7 @@ export class HTMLGenerator {
 	 * relative to the compiled `dist/` output directory.
 	 */
 	constructor() {
-		this.frontendDir = path.join(__dirname, "..", "frontend");
+		this.frontendDir = path.join(__dirname, "..", "..", "frontend");
 		this.templatePath = path.join(this.frontendDir, "template.html");
 		this.bundlePath = path.join(this.frontendDir, "dist", "index.global.js");
 	}

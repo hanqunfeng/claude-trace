@@ -10,8 +10,8 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
-import { RawPair } from "./types";
-import { HTMLGenerator } from "./html-generator";
+import { RawPair } from "../types";
+import { HTMLGenerator } from "../report/html-generator";
 
 /** Configuration for {@link ClaudeTrafficLogger}. */
 export interface InterceptorConfig {
