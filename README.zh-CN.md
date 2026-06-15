@@ -4,7 +4,7 @@
 
 记录 **Claude Code**、**OpenCode** 与 **Codex CLI** 的 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
 
-**[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制、独立的 **[OpenCode](https://opencode.ai)** 命令（多 provider 拦截，Anthropic 与 OpenAI API 格式），以及 **Codex CLI ChatGPT OAuth** 追踪（通过 ChatGPT 账号登录 —— 多数用户的默认 Codex 认证方式）。
+**[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制、独立的 **[OpenCode](https://opencode.ai)** 命令（多 provider 拦截，Anthropic 与 OpenAI API 格式），以及 **[Codex CLI](https://developers.openai.com/codex/cli) ChatGPT OAuth** 追踪（通过 ChatGPT 账号登录 —— 多数用户的默认 Codex 认证方式）。
 
 ## 支持的工具
 
