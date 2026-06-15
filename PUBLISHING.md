@@ -102,7 +102,7 @@ node dist/cli/cli.js --help
 
 ### 2. 更新版本号
 
-遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
+* 遵循 [语义化版本](https://semver.org/lang/zh-CN/)：
 
 | 变更类型 | 命令 | 示例 |
 |----------|------|------|
@@ -110,13 +110,21 @@ node dist/cli/cli.js --help
 | 次版本（新功能，向后兼容） | `npm version minor` | 2.0.2 → 2.1.0 |
 | 主版本（破坏性变更） | `npm version major` | 2.0.2 → 3.0.0 |
 
-该命令会同时更新 `package.json` 和 `package-lock.json`，并创建 git tag。
+* 它实际上做了三件事：
 
+(1) 修改 package.json 版本
 ```bash
-git add package.json package-lock.json
-git commit -m "chore: bump version to x.y.z"
-git push && git push --tags
+"version": "1.0.0" → "1.0.1"
 ```
+(2) 自动创建 git commit
+```bash
+git commit -am "1.0.1"
+```
+(3) 自动打 tag
+```bash
+git tag v1.0.1
+```
+
 
 ### 3. 确认 Token 已配置
 
