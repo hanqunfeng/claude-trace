@@ -9,6 +9,7 @@ frontend/dist/
 .claude-trace/
 .opencode-trace/
 .codex-trace/
+.vibe-coding-proxy/
 
 # Environment & secrets
 .env
