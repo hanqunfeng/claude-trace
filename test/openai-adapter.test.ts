@@ -181,6 +181,23 @@ describe("buildOpenAIResponsesFromSSE", () => {
 		const textBlock = message.content.find((block) => block.type === "text");
 		assert.equal((textBlock as { text?: string })?.text, "Hello world");
 	});
+
+	/**
+	 * Some ChatGPT OAuth snapshots send singleton content objects or summary fields.
+	 */
+	it("parses completed snapshots with singleton content objects", () => {
+		const sse = [
+			'data: {"type":"response.completed","response":{"id":"resp_2","model":"gpt-5.5","output":[{"type":"message","role":"assistant","content":{"type":"output_text","text":"你好"}},{"type":"reasoning","summary":{"type":"summary_text","text":"思考摘要"}}],"usage":{"input_tokens":3,"output_tokens":4}}}',
+			"data: [DONE]",
+		].join("\n");
+
+		const built = buildOpenAIResponsesFromSSE(sse, "gpt-5.5");
+		const message = parseOpenAIResponsesBody(built, "gpt-5.5");
+		const textBlock = message.content.find((block) => block.type === "text");
+		const thinkingBlock = message.content.find((block) => block.type === "thinking");
+		assert.equal((textBlock as { text?: string })?.text, "你好");
+		assert.equal((thinkingBlock as { thinking?: string })?.thinking, "思考摘要");
+	});
 });
 
 /**

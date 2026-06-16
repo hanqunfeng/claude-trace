@@ -86,7 +86,8 @@ interface OpenAIResponsesOutputItem {
 	name?: string;
 	arguments?: string;
 	call_id?: string;
-	content?: Array<{ type: string; text?: string }>;
+	content?: string | Array<{ type: string; text?: string }>;
+	summary?: string | Array<{ type: string; text?: string }>;
 }
 
 /** Parsed OpenAI Responses API response body. */
@@ -115,6 +116,25 @@ function emptyUsage() {
 
 /** OpenAI/Responses content part types that map to Anthropic text blocks. */
 const TEXT_PART_TYPES = new Set(["text", "input_text", "output_text"]);
+
+/** Normalize provider variants of Responses text parts into an iterable list. */
+function normalizeTextParts(value: unknown): Array<{ type: string; text?: string }> {
+	if (!value) {
+		return [];
+	}
+	if (typeof value === "string") {
+		return [{ type: "text", text: value }];
+	}
+	if (Array.isArray(value)) {
+		return value.filter((part): part is { type: string; text?: string } => {
+			return typeof part === "object" && part !== null && "type" in part;
+		});
+	}
+	if (typeof value === "object" && "type" in value) {
+		return [value as { type: string; text?: string }];
+	}
+	return [];
+}
 
 /**
  * Converts OpenAI message content (string or part array) to Anthropic text blocks.
@@ -444,7 +464,7 @@ function parseResponsesOutputItem(item: OpenAIResponsesOutputItem): ContentBlock
 	const blocks: ContentBlock[] = [];
 
 	if (item.type === "message" && item.content) {
-		for (const part of item.content) {
+		for (const part of normalizeTextParts(item.content)) {
 			if (part.type === "output_text" || part.type === "text") {
 				blocks.push({ type: "text", text: part.text || "", citations: null });
 			}
@@ -469,7 +489,7 @@ function parseResponsesOutputItem(item: OpenAIResponsesOutputItem): ContentBlock
 	}
 
 	if (item.type === "reasoning") {
-		const summaryText = (item.content || [])
+		const summaryText = [...normalizeTextParts(item.summary), ...normalizeTextParts(item.content)]
 			.map((part) => (part.type === "summary_text" ? part.text || "" : ""))
 			.join("");
 		if (summaryText) {
@@ -692,8 +712,9 @@ export function buildOpenAIResponsesFromSSE(bodyRaw: string, model = "unknown"):
 		}
 	}
 
-	if (result.output?.[0]?.content?.[0]) {
-		result.output[0].content[0].text = text;
+	const firstContent = result.output?.[0]?.content;
+	if (Array.isArray(firstContent) && firstContent[0]) {
+		firstContent[0].text = text;
 	}
 
 	if (functionCalls.size > 0) {

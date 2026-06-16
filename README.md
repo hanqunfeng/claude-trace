@@ -2,9 +2,16 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Record API traffic from **Claude Code**, **OpenCode**, and **Codex CLI** while you work. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
+Record API traffic from **Claude Code**, **OpenCode**, **Codex CLI**, and allowlisted LLM endpoints through a standalone forward proxy. Inspect everything the tools hide — system prompts, tool outputs, thinking blocks, and raw request/response data — in a self-contained HTML viewer.
 
-**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support, a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats), and **Codex CLI ChatGPT OAuth** tracing (login via ChatGPT account — the default Codex auth path for most users).
+**Fork of [mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)**, extended with [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) native-binary support, a dedicated **[OpenCode](https://opencode.ai)** CLI with multi-provider interception (Anthropic and OpenAI API formats), and **[Codex CLI](https://developers.openai.com/codex/cli) ChatGPT OAuth** tracing (login via ChatGPT account — the default Codex auth path for most users).
+
+## Proxy modes (forward & reverse)
+
+This project supports **both**:
+
+- **Reverse proxy (built-in tool wrappers)**: `claude-trace`, `opencode-trace`, `codex-trace` start a local reverse proxy and launch the target tool with its upstream base URL redirected to the proxy (so traffic is logged automatically).
+- **Forward proxy (standalone)**: `vibe-coding-proxy` starts an HTTP/HTTPS forward proxy only. You must **export `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` before starting the client** you want to trace.
 
 ## Supported tools
 
@@ -13,6 +20,7 @@ Record API traffic from **Claude Code**, **OpenCode**, and **Codex CLI** while y
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; **ChatGPT OAuth** & OpenAI API Key (Responses API) |
+| **Standalone proxy** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | Forward proxy via `HTTP_PROXY` / `HTTPS_PROXY`; allowlist-scoped HTTPS MITM |
 
 All commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
 
@@ -29,6 +37,9 @@ opencode-trace
 
 # Codex CLI
 codex-trace
+
+# Standalone forward proxy
+vibe-coding-proxy --target-url https://api.deepseek.com/anthropic
 ```
 
 When a session ends, the latest HTML report opens in your browser automatically (disable with `--no-open`).
@@ -48,8 +59,8 @@ git clone https://github.com/hanqunfeng/claude-trace.git
 cd claude-trace
 npm run setup   # installs root + frontend dependencies
 npm run build
-npm link        # optional: global `claude-trace`, `opencode-trace`, and `codex-trace`
-# Without link: node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js
+npm link        # optional: global `claude-trace`, `opencode-trace`, `codex-trace`, and `vibe-coding-proxy`
+# Without link: node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js / node dist/cli/vibe-coding-proxy-cli.js
 ```
 
 ## Claude Code (`claude-trace`)
@@ -318,6 +329,73 @@ Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
 - **Ollama / LM Studio** built-in providers are not intercepted (traffic bypasses the proxy).
 - Older `auth.json` files without `auth_mode` fall back to legacy heuristics; re-login with ChatGPT if OAuth routing misbehaves.
 - **Node.js:** Codex ChatGPT OAuth tracing works on **Node.js 16+** (the proxy forwards zstd request bodies unchanged). **Node.js 22+** is recommended so zstd-compressed request bodies are decompressed in logs and HTML; on Node 16–21, request entries show a placeholder instead of parsed JSON (responses and proxy behavior are unaffected).
+
+---
+
+## Standalone forward proxy (`vibe-coding-proxy`)
+
+`vibe-coding-proxy` starts only the proxy service. It does not spawn Claude Code, OpenCode, Codex, or any other client. Point any compatible CLI at the printed proxy URL with `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
+
+### Compatibility & usage order
+
+- **Tested clients**: Claude Code, OpenCode, Codex CLI. Other clients may work if they respect standard proxy env vars, but are not tested yet.
+- **Order matters**: start `vibe-coding-proxy` → export env vars in the same shell/session → then start your client/tool. If you start the client first, it may not pick up the proxy settings.
+
+### Usage
+
+```bash
+# Log a specific DeepSeek Anthropic-compatible endpoint
+vibe-coding-proxy --target-url https://api.deepseek.com/anthropic
+
+# Log every HTTPS request on a host
+vibe-coding-proxy --mitm-host api.deepseek.com
+
+# Use a fixed local port
+vibe-coding-proxy --target-url https://api.deepseek.com --port 8888
+
+# Generate HTML from a previous .jsonl log
+vibe-coding-proxy --generate-html .vibe-coding-proxy/log-2025-01-01-12-00-00.jsonl
+```
+
+After startup, export the printed proxy URL:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:PORT
+export HTTPS_PROXY=http://127.0.0.1:PORT
+export ALL_PROXY=http://127.0.0.1:PORT
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+export SSL_CERT_FILE=CA_CERT_PATH
+```
+
+Logs: `.vibe-coding-proxy/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory.
+
+### HTTPS logging and CA trust
+
+HTTPS requests sent through `HTTPS_PROXY` normally use `CONNECT host:443`, which hides JSON bodies from the proxy. To log request/response bodies, `vibe-coding-proxy` performs MITM only for `--target-url` / `--mitm-host` allowlist entries and prints a local CA certificate path.
+
+Trust that CA only in clients whose model traffic you want to inspect. The command never installs the CA into your system trust store automatically. `NODE_TLS_REJECT_UNAUTHORIZED=0` only helps Node.js clients; Codex ChatGPT OAuth is a Rust client and may require `SSL_CERT_FILE` or OS-level trust for the printed CA. Non-allowlisted HTTPS traffic is passed through as a raw CONNECT tunnel and only logged as metadata when `--include-all-requests` is enabled.
+
+### Local CA lifecycle
+
+The local CA is reused across proxy runs from `~/.claude-trace/vibe-coding-proxy-ca/` unless you pass `--ca-dir`. `ca.crt` is valid for 10 years; per-host leaf certificates such as `api.deepseek.com.crt.pem` are valid for 1 year. Expired leaf certificates are reissued automatically. If the CA expires, it is regenerated and all cached leaf certificates are removed; you must trust the new CA again.
+
+
+### CLI options
+
+| Flag | Description |
+|------|-------------|
+| `--target-url URL` | URL prefix to decrypt and fully log (repeatable) |
+| `--mitm-host HOST` | Hostname to decrypt and fully log (repeatable) |
+| `--host HOST` | Listen host (default `127.0.0.1`) |
+| `--port PORT` | Listen port (default `0`, random) |
+| `--log-dir DIR` | Log directory (default `.vibe-coding-proxy`) |
+| `--log NAME` | Custom log file base name |
+| `--ca-dir DIR` | Local CA and leaf certificate cache directory |
+| `--no-mitm` | Disable TLS MITM; HTTPS CONNECT is pass-through only |
+| `--include-all-requests` | Log pass-through CONNECT metadata and non-target HTTP traffic |
+| `--include-sensitive-headers` | Log auth headers without redaction |
+| `--no-open` | Don't open generated HTML on exit |
+| `--generate-html FILE [OUT]` | Generate HTML report from JSONL |
 
 ---
 

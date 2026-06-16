@@ -16,7 +16,7 @@ Read `README.md` at the start of a session for user-facing usage, troubleshootin
 
 ## Project Summary
 
-`@hanqunfeng/claude-trace` records coding-agent API traffic and renders self-contained HTML reports. Fork of mariozechner/claude-trace with **Claude Code V2+ native binary support**, **OpenCode** via `opencode-trace`, and **Codex CLI** via `codex-trace`.
+`@hanqunfeng/claude-trace` records coding-agent API traffic and renders self-contained HTML reports. Fork of mariozechner/claude-trace with **Claude Code V2+ native binary support**, **OpenCode** via `opencode-trace`, **Codex CLI** via `codex-trace`, and standalone forward-proxy logging via `vibe-coding-proxy`.
 
 ## Multi-Tool Architecture
 
@@ -26,6 +26,8 @@ All CLIs share the same core pipeline via **Tool Profiles**:
 cli/cli.ts | opencode-cli.ts | codex-cli.ts  →  cli/trace-runner.ts  →  intercept/reverse-proxy.ts | intercept/interceptor.ts
                                                     ↑
                                 tools/claude.ts | tools/opencode.ts | tools/codex.ts
+
+vibe-coding-proxy-cli.ts → intercept/forward-proxy.ts → intercept/proxy-log-writer.ts → report/html-generator.ts
 ```
 
 | Tool | CLI command | Log directory | Config injection |
@@ -33,8 +35,15 @@ cli/cli.ts | opencode-cli.ts | codex-cli.ts  →  cli/trace-runner.ts  →  inte
 | Claude Code | `claude-trace` | `.claude-trace/` | `ANTHROPIC_BASE_URL` → proxy; optional persistent `CLAUDE_CONFIG_DIR` overlay when `settings.json` also sets `ANTHROPIC_BASE_URL` |
 | OpenCode | `opencode-trace` | `.opencode-trace/` | `OPENCODE_CONFIG_CONTENT` runtime override (original config never modified) |
 | Codex CLI | `codex-trace` | `.codex-trace/` | `CODEX_HOME` overlay with rewritten `config.toml` |
+| Standalone proxy | `vibe-coding-proxy` | `.vibe-coding-proxy/` | `HTTP_PROXY` / `HTTPS_PROXY`; allowlist-scoped MITM via local CA |
 
 **Data flow:** proxy/interceptor → JSONL in log dir → `report/shared-conversation-processor.ts` → HTML via `report/html-generator.ts` + `frontend/dist/index.global.js`.
+
+## vibe-coding-proxy
+
+`vibe-coding-proxy` is intentionally decoupled from Tool Profiles: it starts only an HTTP/HTTPS forward proxy and prints the proxy URL for callers to export as `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`. It does not spawn Claude Code or rewrite client config.
+
+HTTPS body logging requires MITM. The proxy must only decrypt targets explicitly configured with `--target-url` or `--mitm-host`; all other CONNECT traffic should pass through as a raw tunnel. The local CA lives under `~/.claude-trace/vibe-coding-proxy-ca/` by default and must never be installed into system trust stores automatically.
 
 ## Claude Code V2+ (Critical)
 
@@ -67,10 +76,13 @@ src/
   types.ts
   cli/
     cli.ts / opencode-cli.ts / codex-cli.ts # thin CLI wrappers
+    vibe-coding-proxy-cli.ts                # standalone forward proxy wrapper
     cli-common.ts                           # shared arg parsing, HTML/index helpers
     trace-runner.ts                         # launch + proxy/interceptor dispatch
   intercept/
     reverse-proxy.ts                        # native binary reverse proxy
+    forward-proxy.ts                        # standalone HTTP/HTTPS forward proxy
+    proxy-log-writer.ts / proxy-targets.ts / mitm-cert.ts
     interceptor.ts                          # V1 fetch() hook (Claude only)
     interceptor-loader.js / token-extractor.js  # copied to dist/intercept/ at build
   config/
@@ -103,14 +115,14 @@ npm run dev          # watch: tsc + loader copy + frontend
 npm run typecheck    # tsc --noEmit
 npm run test:unit    # npx tsx --test test/*.test.ts
 npm run test:generate  # HTML preview from test-traffic.jsonl
-node dist/cli/cli.js | node dist/cli/opencode-cli.js | node dist/cli/codex-cli.js
+node dist/cli/cli.js | node dist/cli/opencode-cli.js | node dist/cli/codex-cli.js | node dist/cli/vibe-coding-proxy-cli.js
 ```
 
 **Important:** `tsc` only compiles `.ts`. `interceptor-loader.js` and `token-extractor.js` must be copied to `dist/intercept/` (handled by `build` and `predev`).
 
 | Area changed | Verify with |
 |--------------|---------------|
-| Proxy / routing / adapter | `npm run test:unit` (`reverse-proxy-path`, `codex-routing`, `opencode-routing`, `openai-adapter`) |
+| Proxy / routing / adapter | `npm run test:unit` (`reverse-proxy-path`, `forward-proxy`, `codex-routing`, `opencode-routing`, `openai-adapter`) |
 | Config overlay | `claude-config-overlay.test.ts`, `codex-routing.test.ts` |
 | HTML / frontend UI | `npm run build` + `npm run test:generate`; edit `frontend/src/` then rebuild frontend |
 | Any interception change | typecheck + test:unit + build; smoke `--help` on affected CLI |

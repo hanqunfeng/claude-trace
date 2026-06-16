@@ -2,9 +2,16 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-记录 **Claude Code**、**OpenCode** 与 **Codex CLI** 的 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
+记录 **Claude Code**、**OpenCode**、**Codex CLI** 以及通过独立正向代理接入的指定大模型端点 API 流量。在自包含 HTML 查看器中查看系统提示词、工具输出、思考块以及完整请求/响应数据。
 
 **[mariozechner/claude-trace](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace) 的分支版本**，扩展支持 [Claude Code V2+](https://docs.anthropic.com/en/docs/claude-code) 原生二进制、独立的 **[OpenCode](https://opencode.ai)** 命令（多 provider 拦截，Anthropic 与 OpenAI API 格式），以及 **[Codex CLI](https://developers.openai.com/codex/cli) ChatGPT OAuth** 追踪（通过 ChatGPT 账号登录 —— 多数用户的默认 Codex 认证方式）。
+
+## 代理模式总览（正向代理 & 反向代理）
+
+本项目同时支持 **两种代理模式**：
+
+- **反向代理（内置工具封装）**：`claude-trace`、`opencode-trace`、`codex-trace` 会启动本地反向代理，并在启动目标工具时把其上游 base URL 重定向到代理（因此可以自动记录流量）。
+- **正向代理（独立代理）**：`vibe-coding-proxy` 只启动 HTTP/HTTPS 正向代理。你需要在启动要追踪的客户端之前，先在同一个 shell/session 中 **导出 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`**。
 
 ## 支持的工具
 
@@ -13,6 +20,7 @@
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式 |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | 反向代理（`CODEX_HOME` 覆盖）；**ChatGPT OAuth** 与 OpenAI API Key（Responses API） |
+| **独立代理** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | 通过 `HTTP_PROXY` / `HTTPS_PROXY` 使用正向代理；仅对 allowlist 目标做 HTTPS MITM |
 
 三条命令共用同一套 HTML 报告界面、JSONL/JSON 导出，以及 `--index` 会话摘要功能。
 
@@ -29,6 +37,9 @@ opencode-trace
 
 # Codex CLI
 codex-trace
+
+# 独立正向代理
+vibe-coding-proxy --target-url https://api.deepseek.com/anthropic
 ```
 
 会话结束后会自动在浏览器中打开最新 HTML 报告（可用 `--no-open` 关闭）。
@@ -48,8 +59,8 @@ git clone https://github.com/hanqunfeng/claude-trace.git
 cd claude-trace
 npm run setup   # 安装根目录 + frontend 依赖
 npm run build
-npm link        # 可选：全局可用 claude-trace、opencode-trace 与 codex-trace
-# 不 link 则用 node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js
+npm link        # 可选：全局可用 claude-trace、opencode-trace、codex-trace 与 vibe-coding-proxy
+# 不 link 则用 node dist/cli/cli.js / node dist/cli/opencode-cli.js / node dist/cli/codex-cli.js / node dist/cli/vibe-coding-proxy-cli.js
 ```
 
 ## Claude Code（`claude-trace`）
@@ -318,6 +329,73 @@ Codex CLI  →  codex-trace 代理（记录）  →  chatgpt.com（OAuth）/ api
 - **Ollama / LM Studio** 内置 provider 不会被拦截（流量绕过代理）。
 - 旧版 `auth.json` 若无 `auth_mode` 字段，会回退到旧启发式；若 OAuth 路由异常，请重新用 ChatGPT 登录。
 - **Node.js：** Codex ChatGPT OAuth 追踪在 **Node.js 16+** 即可正常使用（代理原样转发 zstd 请求体）。建议 **Node.js 22+**，以便在日志与 HTML 中解压展示 zstd 压缩的请求体；Node 16–21 下请求条目会显示占位符而非解析后的 JSON（响应解析与代理行为不受影响）。
+
+---
+
+## 独立正向代理（`vibe-coding-proxy`）
+
+`vibe-coding-proxy` 只启动代理服务，不启动 Claude Code、OpenCode、Codex 或其他客户端。任意兼容 CLI 都可以通过 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 指向启动后打印的代理 URL。
+
+### 兼容性与使用顺序
+
+- **已测试通过的客户端**：Claude Code、OpenCode、Codex CLI。其他客户端若遵循标准代理环境变量，理论上也可能可用，但目前未做测试。
+- **必须先设环境变量再启动**：先启动 `vibe-coding-proxy` → 在同一个 shell/session 里导出环境变量 → 再启动客户端/工具。若先启动客户端，它可能不会读取到新的代理设置。
+
+### 用法
+
+```bash
+# 记录指定 DeepSeek Anthropic 兼容端点
+vibe-coding-proxy --target-url https://api.deepseek.com/anthropic
+
+# 记录某个主机下的所有 HTTPS 请求
+vibe-coding-proxy --mitm-host api.deepseek.com
+
+# 使用固定本地端口
+vibe-coding-proxy --target-url https://api.deepseek.com --port 8888
+
+# 从历史 .jsonl 生成 HTML
+vibe-coding-proxy --generate-html .vibe-coding-proxy/log-2025-01-01-12-00-00.jsonl
+```
+
+启动后导出打印的代理 URL：
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:PORT
+export HTTPS_PROXY=http://127.0.0.1:PORT
+export ALL_PROXY=http://127.0.0.1:PORT
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+export SSL_CERT_FILE=CA_CERT_PATH
+```
+
+日志路径：当前目录 `.vibe-coding-proxy/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}`。
+
+### HTTPS 记录与 CA 信任
+
+通过 `HTTPS_PROXY` 发送的 HTTPS 请求通常先发起 `CONNECT host:443`，代理无法直接看到 JSON body。为了记录请求/响应 body，`vibe-coding-proxy` 只会对 `--target-url` / `--mitm-host` allowlist 命中的目标执行 MITM，并打印本地 CA 证书路径。
+
+只应在你希望检查模型流量的客户端中信任该 CA。命令不会自动把 CA 安装到系统信任链。`NODE_TLS_REJECT_UNAUTHORIZED=0` 只对 Node.js 客户端有效；Codex ChatGPT OAuth 是 Rust 客户端，通常需要 `SSL_CERT_FILE` 或操作系统级信任该 CA。未命中 allowlist 的 HTTPS 流量会作为原始 CONNECT 隧道透传，仅在开启 `--include-all-requests` 时记录元数据。
+
+### 本地 CA 生命周期
+
+本地 CA 默认复用 `~/.claude-trace/vibe-coding-proxy-ca/`，除非你传入 `--ca-dir`。`ca.crt` 有效期为 10 年；按主机缓存的 leaf 证书（如 `api.deepseek.com.crt.pem`）有效期为 1 年。leaf 证书过期会自动重签。CA 过期时会重新生成，并清理所有旧 leaf 证书；此时需要重新信任新的 CA。
+
+
+### CLI 选项
+
+| 参数 | 说明 |
+|------|------|
+| `--target-url URL` | 解密并完整记录的 URL 前缀（可重复） |
+| `--mitm-host HOST` | 解密并完整记录的主机名（可重复） |
+| `--host HOST` | 监听地址（默认 `127.0.0.1`） |
+| `--port PORT` | 监听端口（默认 `0`，随机） |
+| `--log-dir DIR` | 日志目录（默认 `.vibe-coding-proxy`） |
+| `--log NAME` | 自定义日志文件名前缀 |
+| `--ca-dir DIR` | 本地 CA 与 leaf 证书缓存目录 |
+| `--no-mitm` | 禁用 TLS MITM；HTTPS CONNECT 仅透传 |
+| `--include-all-requests` | 记录透传 CONNECT 元数据与非目标 HTTP 流量 |
+| `--include-sensitive-headers` | 不脱敏记录认证头 |
+| `--no-open` | 退出时不自动打开 HTML |
+| `--generate-html FILE [OUT]` | 从 JSONL 生成 HTML 报告 |
 
 ---
 
