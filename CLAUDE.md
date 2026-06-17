@@ -1,5 +1,7 @@
 # claude-trace — AI Assistant Guide
 
+我想随便写点什么呢？
+
 Read `README.md` at the start of a session for user-facing usage, troubleshooting, and flag tables.
 
 **Doc hierarchy:** this file = agent invariants + architecture map + file touch guide + **code comment standards**. `README.md` = full CLI docs. When adding a flag or env var, update both (one line here, full table in README).
