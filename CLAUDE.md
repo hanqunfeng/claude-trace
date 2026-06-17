@@ -14,6 +14,7 @@ Read `README.md` at the start of a session for user-facing usage, troubleshootin
 - Node **>= 16** required (`package.json` engines).
 - **Every `.ts` file you create or materially edit** must follow [Code Comments](#code-comments) (English JSDoc + `@file` header). Touching a file only for typos/formatting does not require a full doc pass.
 
+
 ## Project Summary
 
 `@hanqunfeng/claude-trace` records coding-agent API traffic and renders self-contained HTML reports. Fork of mariozechner/claude-trace with **Claude Code V2+ native binary support**, **OpenCode** via `opencode-trace`, **Codex CLI** via `codex-trace`, and standalone forward-proxy logging via `vibe-coding-proxy`.
