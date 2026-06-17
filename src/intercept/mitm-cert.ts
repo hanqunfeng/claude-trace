@@ -74,7 +74,7 @@ export class MitmCertificateAuthority {
 
 		if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
 			const cachedCertPem = fs.readFileSync(certPath, "utf-8");
-			if (!isCertificateExpired(cachedCertPem)) {
+			if (isLeafCertificateUsable(cachedCertPem)) {
 				return {
 					cert: cachedCertPem,
 					key: fs.readFileSync(keyPath, "utf-8"),
@@ -100,12 +100,17 @@ export class MitmCertificateAuthority {
 		cert.setSubject(attrs);
 		cert.setIssuer(authority.cert.subject.attributes);
 		cert.setExtensions([
-			{ name: "basicConstraints", cA: false },
-			{ name: "keyUsage", digitalSignature: true, keyEncipherment: true },
+			{ name: "basicConstraints", cA: false, critical: true },
+			{ name: "keyUsage", digitalSignature: true, keyEncipherment: true, critical: true },
 			{ name: "extKeyUsage", serverAuth: true },
 			{
 				name: "subjectAltName",
 				altNames: buildSubjectAltNames(normalizedHost),
+			},
+			{ name: "subjectKeyIdentifier" },
+			{
+				name: "authorityKeyIdentifier",
+				keyIdentifier: authority.cert.generateSubjectKeyIdentifier().getBytes(),
 			},
 		]);
 		cert.sign(authority.key, forge.md.sha256.create());
@@ -129,7 +134,7 @@ export class MitmCertificateAuthority {
 		if (fs.existsSync(this.caKeyPath) && fs.existsSync(this.caCertPath)) {
 			const keyPem = fs.readFileSync(this.caKeyPath, "utf-8");
 			const certPem = fs.readFileSync(this.caCertPath, "utf-8");
-			if (!isCertificateExpired(certPem)) {
+			if (isAuthorityCertificateUsable(certPem)) {
 				this.authority = {
 					key: forge.pki.privateKeyFromPem(keyPem) as forge.pki.rsa.PrivateKey,
 					cert: forge.pki.certificateFromPem(certPem),
@@ -156,9 +161,10 @@ export class MitmCertificateAuthority {
 		cert.setSubject(attrs);
 		cert.setIssuer(attrs);
 		cert.setExtensions([
-			{ name: "basicConstraints", cA: true },
-			{ name: "keyUsage", keyCertSign: true, digitalSignature: true, cRLSign: true },
+			{ name: "basicConstraints", cA: true, critical: true, pathLenConstraint: 1 },
+			{ name: "keyUsage", keyCertSign: true, digitalSignature: true, cRLSign: true, critical: true },
 			{ name: "subjectKeyIdentifier" },
+			{ name: "authorityKeyIdentifier", keyIdentifier: true },
 		]);
 		cert.sign(keys.privateKey, forge.md.sha256.create());
 
@@ -190,6 +196,45 @@ function safeFileName(hostname: string): string {
 function isCertificateExpired(certPem: string, now: Date = new Date()): boolean {
 	const cert = forge.pki.certificateFromPem(certPem);
 	return cert.validity.notAfter.getTime() <= now.getTime();
+}
+
+/** Return true when a cached CA has the stricter MITM root extensions we expect. */
+function isAuthorityCertificateUsable(certPem: string): boolean {
+	try {
+		const cert = forge.pki.certificateFromPem(certPem);
+		return (
+			!isCertificateExpired(certPem) &&
+			hasExtension(cert, "basicConstraints") &&
+			hasExtension(cert, "keyUsage") &&
+			hasExtension(cert, "subjectKeyIdentifier") &&
+			hasExtension(cert, "authorityKeyIdentifier")
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Return true when a cached leaf certificate has SAN and chain-linking extensions. */
+function isLeafCertificateUsable(certPem: string): boolean {
+	try {
+		const cert = forge.pki.certificateFromPem(certPem);
+		return (
+			!isCertificateExpired(certPem) &&
+			hasExtension(cert, "basicConstraints") &&
+			hasExtension(cert, "keyUsage") &&
+			hasExtension(cert, "extKeyUsage") &&
+			hasExtension(cert, "subjectAltName") &&
+			hasExtension(cert, "subjectKeyIdentifier") &&
+			hasExtension(cert, "authorityKeyIdentifier")
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Check whether a parsed certificate contains an extension by name. */
+function hasExtension(cert: forge.pki.Certificate, name: string): boolean {
+	return Boolean(cert.getExtension({ name }));
 }
 
 /** Remove cached leaf certificates after the signing CA has been rotated. */

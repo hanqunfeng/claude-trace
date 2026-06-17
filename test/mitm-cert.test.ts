@@ -27,6 +27,9 @@ describe("MitmCertificateAuthority", () => {
 		assert.equal(fs.existsSync(info.certPath), true);
 		assert.equal(fs.existsSync(info.keyPath), true);
 		assert.match(info.certPem, /BEGIN CERTIFICATE/);
+		const cert = forge.pki.certificateFromPem(info.certPem);
+		assert.ok(cert.getExtension({ name: "subjectKeyIdentifier" }));
+		assert.ok(cert.getExtension({ name: "authorityKeyIdentifier" }));
 	});
 
 	/** Leaf certificates are cached by normalized host name. */
@@ -39,6 +42,10 @@ describe("MitmCertificateAuthority", () => {
 
 		assert.equal(first.cert, second.cert);
 		assert.equal(first.key, second.key);
+		const cert = forge.pki.certificateFromPem(first.cert);
+		assert.ok(cert.getExtension({ name: "subjectAltName" }));
+		assert.ok(cert.getExtension({ name: "subjectKeyIdentifier" }));
+		assert.ok(cert.getExtension({ name: "authorityKeyIdentifier" }));
 	});
 
 	/** Expired leaf certificates should be replaced automatically. */
