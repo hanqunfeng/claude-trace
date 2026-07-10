@@ -31,10 +31,22 @@ jobs:
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-          package-manager-cache: false
 
-      - name: Ensure npm supports OIDC trusted publishing
-        run: npm install -g npm@latest
+      - name: Verify npm supports OIDC trusted publishing
+        run: |
+          node --version
+          NPM_VERSION="$(npm --version)"
+          echo "npm ${NPM_VERSION}"
+          node -e "
+            const [major, minor, patch] = process.argv[1].split('.').map(Number);
+            if (major < 11 || (major === 11 && minor < 5) || (major === 11 && minor === 5 && patch < 1)) {
+              console.error('npm ' + process.argv[1] + ' is too old; need >= 11.5.1 for OIDC trusted publishing');
+              process.exit(1);
+            }
+          " "${NPM_VERSION}"
+
+      - name: Install provenance tooling
+        run: npm install -g sigstore@latest
 
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
@@ -68,10 +80,11 @@ jobs:
         run: npm pack --dry-run
 
       - name: Publish to npm (OIDC)
+        env:
+          # setup-node injects a dummy token; OIDC publish must not use it.
+          NODE_AUTH_TOKEN: ""
         run: |
-          # setup-node may inject a static auth token; OIDC publish must not use it.
           npm config delete //registry.npmjs.org/:_authToken 2>/dev/null || true
-          unset NODE_AUTH_TOKEN
           npm publish --access public
 
       - name: Verify npm registry version
