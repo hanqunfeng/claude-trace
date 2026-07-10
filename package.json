@@ -29,7 +29,13 @@
 		"publish:release": "bash scripts/publish.sh",
 		"publish:patch": "bash scripts/publish.sh patch",
 		"publish:minor": "bash scripts/publish.sh minor",
-		"publish:major": "bash scripts/publish.sh major"
+		"publish:major": "bash scripts/publish.sh major",
+		"publish:oidc:check": "bash scripts/publish-oidc.sh --check",
+		"publish:oidc:dry-run": "bash scripts/publish-oidc.sh --dry-run",
+		"publish:oidc": "bash scripts/publish-oidc.sh",
+		"publish:oidc:patch": "bash scripts/publish-oidc.sh patch",
+		"publish:oidc:minor": "bash scripts/publish-oidc.sh minor",
+		"publish:oidc:major": "bash scripts/publish-oidc.sh major"
 	},
 	"files": [
 		"dist/**/*",
