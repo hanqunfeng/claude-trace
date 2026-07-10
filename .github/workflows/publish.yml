@@ -1,0 +1,120 @@
+# Publish @hanqunfeng/claude-trace to npm via OIDC Trusted Publishing.
+# Prerequisites: configure a Trusted Publisher on npmjs.com for this package
+# (owner: hanqunfeng, repo: claude-trace, workflow: publish.yml).
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Ensure npm supports OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v${VERSION}" != "${TAG}" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${VERSION}"
+            exit 1
+          fi
+          echo "Publishing ${TAG} (package.json ${VERSION})"
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix frontend
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test CLI
+        run: node dist/cli/cli.js --help
+
+      - name: Preview package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm (OIDC)
+        run: |
+          # setup-node may inject a static auth token; OIDC publish must not use it.
+          npm config delete //registry.npmjs.org/:_authToken 2>/dev/null || true
+          unset NODE_AUTH_TOKEN
+          npm publish --access public
+
+      - name: Verify npm registry version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          for attempt in $(seq 1 10); do
+            PUBLISHED=$(npm view @hanqunfeng/claude-trace version --prefer-online 2>/dev/null || true)
+            if [ "${PUBLISHED}" = "${VERSION}" ]; then
+              echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm"
+              exit 0
+            fi
+            echo "Waiting for registry sync (${attempt}/10): npm=${PUBLISHED:-<none>} local=${VERSION}"
+            sleep 3
+          done
+          echo "::error::Registry version mismatch after publish"
+          exit 1
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          REPO="${{ github.repository }}"
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists, skipping"
+            exit 0
+          fi
+          NOTES_FILE=$(mktemp)
+          {
+            echo "## Install"
+            echo '```bash'
+            echo "npm install -g @hanqunfeng/claude-trace"
+            echo '```'
+            echo ""
+            gh api "repos/${REPO}/releases/generate-notes" \
+              -f "tag_name=${TAG}" \
+              -f "target_commitish=${GITHUB_SHA}" \
+              --jq .body 2>/dev/null \
+              || git log -20 --pretty=format:'- %s (%h)'
+          } >"${NOTES_FILE}"
+          gh release create "${TAG}" \
+            --repo "${REPO}" \
+            --title "${TAG}" \
+            --notes-file "${NOTES_FILE}"
+          rm -f "${NOTES_FILE}"
