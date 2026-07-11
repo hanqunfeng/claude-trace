@@ -115,28 +115,18 @@ claude-trace --help
 
 工作流文件：`.github/workflows/publish.yml`
 
-| 触发方式 | npm 发布 | GitHub Release |
-|----------|----------|----------------|
-| 推送 `v*` 标签 | ✅ | ✅ |
-| `workflow_dispatch --ref main` | ✅ | ❌ |
-
-日常发布请使用 **标签推送**，不要用手动 dispatch 作为常规流程。
+工作流仅由 `v*` 标签推送触发，并同时发布 npm 包和创建 GitHub Release。
 
 ### 工作流自动执行
 
 1. 校验 tag 与 `package.json` 版本一致
-2. `npm ci`（根目录 + frontend）
-3. typecheck、单测、构建
-4. 通过 OIDC 发布到 npm（含 provenance）
-5. 验证 npm 注册表版本
-6. 创建 GitHub Release（自动生成变更说明）
-
-## 手动触发（仅紧急情况）
-
-```bash
-# 只发布 npm，不创建 Release
-gh workflow run publish.yml --ref main
-```
+2. 使用 Node.js 24 自带的兼容 npm，并关闭发布任务的依赖缓存
+3. `npm ci`（根目录 + frontend）
+4. typecheck、单测、构建和 CLI smoke test
+5. 预览 npm 包内容
+6. 通过 OIDC 发布到 npm（自动生成 provenance）
+7. 验证 npm 注册表版本
+8. 创建 GitHub Release（自动生成变更说明）
 
 ## 常见问题
 

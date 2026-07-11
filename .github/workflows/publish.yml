@@ -7,7 +7,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,18 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Verify npm supports OIDC trusted publishing
         run: |
@@ -79,32 +74,8 @@ jobs:
       - name: Preview package contents
         run: npm pack --dry-run
 
-      - name: Configure npm registry for OIDC publish
-        uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          registry-url: https://registry.npmjs.org
-
-      - name: Verify npm provenance dependencies
-        run: |
-          set -euo pipefail
-          NPM_PREFIX="$(npm prefix -g)"
-          PROVENANCE="${NPM_PREFIX}/lib/node_modules/npm/node_modules/libnpmpublish/lib/provenance.js"
-          if ! node -e "require(process.argv[1])" "${PROVENANCE}" >/dev/null 2>&1; then
-            echo "Repairing missing sigstore for npm provenance..."
-            npm install sigstore@latest \
-              --prefix "${NPM_PREFIX}/lib/node_modules/npm/node_modules/libnpmpublish" \
-              --no-save --ignore-scripts
-          fi
-          node -e "require(process.argv[1]); console.log('provenance module ok')" "${PROVENANCE}"
-
       - name: Publish to npm (OIDC)
-        env:
-          # setup-node injects a dummy token; OIDC publish must not use it.
-          NODE_AUTH_TOKEN: ""
-        run: |
-          npm config delete //registry.npmjs.org/:_authToken 2>/dev/null || true
-          npm publish --access public
+        run: npm publish --access public
 
       - name: Verify npm registry version
         run: |
@@ -132,21 +103,14 @@ jobs:
             echo "Release ${TAG} already exists, skipping"
             exit 0
           fi
-          NOTES_FILE=$(mktemp)
-          {
-            echo "## Install"
-            echo '```bash'
-            echo "npm install -g @hanqunfeng/claude-trace"
-            echo '```'
-            echo ""
-            gh api "repos/${REPO}/releases/generate-notes" \
-              -f "tag_name=${TAG}" \
-              -f "target_commitish=${GITHUB_SHA}" \
-              --jq .body 2>/dev/null \
-              || git log -20 --pretty=format:'- %s (%h)'
-          } >"${NOTES_FILE}"
           gh release create "${TAG}" \
             --repo "${REPO}" \
             --title "${TAG}" \
-            --notes-file "${NOTES_FILE}"
-          rm -f "${NOTES_FILE}"
+            --generate-notes \
+            --notes "$(cat <<'EOF'
+          ## Install
+          ```bash
+          npm install -g @hanqunfeng/claude-trace
+          ```
+          EOF
+          )"
