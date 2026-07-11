@@ -4,7 +4,7 @@
 
 本地机器**不执行** `npm publish`，也**不需要** npm Access Token。推送 `v*` 标签后，GitHub Actions 工作流 `.github/workflows/publish.yml` 会自动完成构建、npm 发布和 GitHub Release。
 
-> 传统的 Access Token 本地发布方式见 [PUBLISHING.md](./PUBLISHING.md) 与 `scripts/publish.sh`。
+> 传统的 Access Token 本地发布方式见 [Access Token 发布流程](./access-token.md) 与 `scripts/publish.sh`。
 
 ## 架构
 
@@ -173,7 +173,7 @@ gh release create v3.0.10 \
 
 ## 与本地 Token 发布的对比
 
-| | OIDC（本文档） | Access Token（PUBLISHING.md） |
+| | OIDC（本文档） | Access Token（[access-token.md](./access-token.md)） |
 |--|----------------|-------------------------------|
 | npm Token | 不需要 | 需要 Bypass 2FA Token |
 | 发布执行方 | GitHub Actions | 本地 `npm publish` |

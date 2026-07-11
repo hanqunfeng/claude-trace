@@ -84,7 +84,7 @@ npm v12 已正式发布并标记为 `latest`。本次大版本包含两项重要
 自动化发布应迁移至：
 
 1. **Trusted Publishing（OIDC）** — 推荐，无需长期有效的 publish Token  
-   - 本项目已采用，见 [PUBLISHING-OIDC.md](./PUBLISHING-OIDC.md)
+   - 本项目已采用，见 [OIDC 发布流程](./publishing/oidc.md)
 2. **Staged Publishing + 人工 2FA 审批** — 作为过渡方案
 
 GitHub/npm 将在未来数月内提供更多迁移工具与指南，并在后续社区讨论中发布详细迁移文档。
@@ -96,7 +96,7 @@ GitHub/npm 将在未来数月内提供更多迁移工具与指南，并在后续
 | 变更 | 影响 |
 |------|------|
 | npm v12 安装脚本默认关闭 | 若 CI/本地 `npm install` 依赖 postinstall 脚本，需运行 `npm approve-scripts` 并提交 allowlist |
-| GAT bypass2fa 弃用 | 若仍用长期 Token 本地发布，应迁移至 OIDC；本项目 `PUBLISHING-OIDC.md` 已覆盖推荐路径 |
+| GAT bypass2fa 弃用 | 若仍用长期 Token 本地发布，应迁移至 OIDC；本项目 [OIDC 发布流程](./publishing/oidc.md) 已覆盖推荐路径 |
 | 直接 publish Token 弃用 | `scripts/publish.sh` 等传统 Token 发布方式需逐步淘汰，优先使用 `.github/workflows/publish.yml` |
 
 ---

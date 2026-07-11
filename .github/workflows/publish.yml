@@ -1,28 +1,42 @@
-# Publish @hanqunfeng/claude-trace to npm via OIDC Trusted Publishing.
-# Prerequisites: configure a Trusted Publisher on npmjs.com for this package
-# (owner: hanqunfeng, repo: claude-trace, workflow: publish.yml).
+# 通过 npm Trusted Publishing（OIDC）发布 @hanqunfeng/claude-trace。
+# OIDC 使用 GitHub 临时身份凭证，不需要保存长期有效的 NPM_TOKEN。
+# 前置条件：在 npmjs.com 为本包配置 Trusted Publisher：
+# owner=hanqunfeng、repo=claude-trace、workflow=publish.yml。
 name: Publish
 
+# 只有推送 v 开头的 Git 标签（例如 v3.0.12）时才执行发布。
 on:
   push:
     tags:
       - "v*"
 
+# 创建 GitHub Release 需要写仓库内容；npm OIDC 认证需要签发身份令牌。
 permissions:
   contents: write
   id-token: write
 
+# 同一个标签只允许一个发布任务运行。
+# 发布任务不能被后来的运行自动取消，否则可能出现 npm 已发布但 Release 未创建的状态。
 concurrency:
+  # publish-：自定义前缀，用于标识 npm 发布任务。
+  # github.workflow：当前工作流的 name，即上面的 Publish。
+  # github.ref：触发工作流的完整 Git 引用，例如 refs/tags/v3.0.12。
+  # 因此该示例最终生成的并发组名称为 publish-Publish-refs/tags/v3.0.12。
   group: publish-${{ github.workflow }}-${{ github.ref }}
+  # false 表示新任务不会取消同组中正在运行的发布任务。
   cancel-in-progress: false
 
 jobs:
   publish:
+    # 使用 GitHub 托管的最新 Ubuntu 环境，OIDC Trusted Publishing 不支持自托管 Runner。
     runs-on: ubuntu-latest
     steps:
+      # 第一步：检出触发当前工作流的标签所对应的源代码。
       - name: Checkout
         uses: actions/checkout@v6
 
+      # 第二步：安装 Node.js，并将 npm 发布目标明确设置为官方注册表。
+      # 发布任务禁用依赖缓存，确保使用 lockfile 和注册表中的原始依赖重新安装。
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -30,11 +44,15 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      # 第三步：确认 Runner 中的 npm 满足 OIDC 最低版本要求（>= 11.5.1）。
+      # 不满足时提前终止，避免到真正发布时才出现难以理解的认证错误。
       - name: Verify npm supports OIDC trusted publishing
         run: |
+          # 输出实际 Node.js 和 npm 版本，便于排查 Actions 日志。
           node --version
           NPM_VERSION="$(npm --version)"
           echo "npm ${NPM_VERSION}"
+          # 将版本拆成 major/minor/patch，并与 OIDC 最低版本比较。
           node -e "
             const [major, minor, patch] = process.argv[1].split('.').map(Number);
             if (major < 11 || (major === 11 && minor < 5) || (major === 11 && minor === 5 && patch < 1)) {
@@ -43,9 +61,12 @@ jobs:
             }
           " "${NPM_VERSION}"
 
+      # 第四步：确保 Git 标签与 package.json 版本完全一致。
+      # 例如 package.json 为 3.0.12 时，只允许使用 v3.0.12 标签发布。
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
+          # 从 refs/tags/v3.0.12 中提取 v3.0.12。
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION=$(node -p "require('./package.json').version")
           if [ "v${VERSION}" != "${TAG}" ]; then
@@ -54,29 +75,41 @@ jobs:
           fi
           echo "Publishing ${TAG} (package.json ${VERSION})"
 
+      # 第五步：严格按照两个 lockfile 安装根项目和前端项目的依赖。
+      # npm ci 不会修改 lockfile，适合可重复的 CI 构建。
       - name: Install dependencies
         run: |
           npm ci
           npm ci --prefix frontend
 
+      # 第六步：只进行 TypeScript 类型检查，不生成构建文件。
       - name: Typecheck
         run: npm run typecheck
 
+      # 第七步：运行全部单元测试；任何测试失败都会阻止发布。
       - name: Unit tests
         run: npm run test:unit
 
+      # 第八步：编译后端 TypeScript、复制拦截器脚本，并构建前端资源。
       - name: Build
         run: npm run build
 
+      # 第九步：执行 CLI 的帮助命令，快速确认构建产物可以由 Node.js 启动。
       - name: Smoke test CLI
         run: node dist/cli/cli.js --help
 
+      # 第十步：预览最终 npm 包中的文件，但不真正创建或发布压缩包。
+      # 这可以在发布前发现 files 配置错误或意外打包敏感文件的问题。
       - name: Preview package contents
         run: npm pack --dry-run
 
+      # 第十一步：npm 自动读取 GitHub OIDC 身份并发布公开的 scoped package。
+      # Trusted Publishing 会自动为该版本生成 provenance，无需 NPM_TOKEN。
       - name: Publish to npm (OIDC)
         run: npm publish --access public
 
+      # 第十二步：轮询 npm 注册表，确认新版本已经可以公开查询。
+      # 注册表同步可能有短暂延迟，因此最多等待 10 次，每次间隔 3 秒。
       - name: Verify npm registry version
         run: |
           VERSION=$(node -p "require('./package.json').version")
@@ -92,17 +125,22 @@ jobs:
           echo "::error::Registry version mismatch after publish"
           exit 1
 
+      # 第十三步：为同一个标签创建 GitHub Release。
+      # 如果此前已经创建过 Release，则直接跳过，保证重复运行时不会报错。
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
+          # GitHub CLI 使用工作流自动提供的短期令牌调用 Release API。
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           REPO="${{ github.repository }}"
+          # 先检查 Release 是否存在，使此步骤可以安全重试。
           if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists, skipping"
             exit 0
           fi
+          # 自动生成提交变更说明，并在说明顶部追加 npm 安装命令。
           gh release create "${TAG}" \
             --repo "${REPO}" \
             --title "${TAG}" \

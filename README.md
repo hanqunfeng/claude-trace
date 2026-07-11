@@ -461,6 +461,17 @@ npm run test:unit
 
 **Frontend** (`frontend/src/`): Lit + Tailwind interactive viewer embedded into HTML reports.
 
+## Documentation
+
+Maintainer and contributor docs live under [`doc/`](doc/):
+
+| Document | Description |
+|----------|-------------|
+| [doc/publishing/oidc.md](doc/publishing/oidc.md) | Recommended npm release via GitHub Actions OIDC |
+| [doc/publishing/access-token.md](doc/publishing/access-token.md) | Legacy local release with npm Access Token |
+| [doc/github-actions-workflow-guide.md](doc/github-actions-workflow-guide.md) | GitHub Actions workflow reference and examples |
+| [doc/npm-v12-security-changelog.md](doc/npm-v12-security-changelog.md) | npm v12 install-time security and GAT deprecation notes |
+
 ## License
 
 MIT — originally by [Mario Zechner](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace), maintained as [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace).

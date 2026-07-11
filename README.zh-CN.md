@@ -461,6 +461,17 @@ npm run test:unit
 
 **前端**（`frontend/src/`）：Lit + Tailwind 交互查看器，嵌入 HTML 报告。
 
+## 文档
+
+维护者与贡献者文档位于 [`doc/`](doc/)：
+
+| 文档 | 说明 |
+|------|------|
+| [doc/publishing/oidc.md](doc/publishing/oidc.md) | 推荐的 GitHub Actions OIDC npm 发布流程 |
+| [doc/publishing/access-token.md](doc/publishing/access-token.md) | 使用 npm Access Token 的本地发布（旧方式） |
+| [doc/github-actions-workflow-guide.md](doc/github-actions-workflow-guide.md) | GitHub Actions 工作流详解与示例 |
+| [doc/npm-v12-security-changelog.md](doc/npm-v12-security-changelog.md) | npm v12 安装安全策略与 GAT 弃用说明 |
+
 ## 许可证
 
 MIT — 原作者 [Mario Zechner](https://github.com/badlogic/lemmy/tree/main/apps/claude-trace)，由 [@hanqunfeng/claude-trace](https://github.com/hanqunfeng/claude-trace) 维护。
