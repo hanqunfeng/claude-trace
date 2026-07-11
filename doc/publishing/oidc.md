@@ -6,6 +6,8 @@
 
 > 传统的 Access Token 本地发布方式见 [Access Token 发布流程](./access-token.md) 与 `scripts/publish.sh`。
 
+> 如果通过 HTTPS 使用 GitHub Personal Access Token（classic）执行 `git push`，该 Token 除了仓库写入权限外，还必须勾选 `workflow` scope（Update GitHub Action workflows）；否则无法新增或修改 `.github/workflows/` 下的 Workflow 文件。
+
 ## 架构
 
 ```
