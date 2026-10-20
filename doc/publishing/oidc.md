@@ -56,14 +56,27 @@ Press Enter to open https://github.com/login/device in your browser...
 ✓ Logged in as hanqunfeng
 
 # 查看认证状态
-gh auth status           # 应显示已登录
-# 输出
+gh auth status           
+# 输出，此时认证没有成功，可以按下面的提示重新认证一次
 github.com
   X Failed to log in to github.com account hanqunfeng (keyring)
   - Active account: true
   - The token in keyring is invalid.
   - To re-authenticate, run: gh auth refresh -h github.com
   - To forget about this account, run: gh auth logout -h github.com -u hanqunfeng
+
+# 先注销，再登录
+gh auth logout -h github.com -u hanqunfeng
+gh auth login
+
+gh auth status 
+# 输出登录成功信息
+github.com
+  ✓ Logged in to github.com account hanqunfeng (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: gho_************************************
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
 ```
 
 ### 3. 脚本可执行权限（首次）
