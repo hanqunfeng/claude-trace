@@ -39,8 +39,31 @@
 
 ```bash
 brew install gh          # macOS
+
+# 登录
 gh auth login
+# 输出
+? Where do you use GitHub? GitHub.com
+? What is your preferred protocol for Git operations on this host? HTTPS
+? Authenticate Git with your GitHub credentials? Yes
+? How would you like to authenticate GitHub CLI? Login with a web browser
+
+! One-time code (C6A7-EB59) copied to clipboard
+Press Enter to open https://github.com/login/device in your browser... 
+✓ Authentication complete.
+- gh config set -h github.com git_protocol https
+✓ Configured git protocol
+✓ Logged in as hanqunfeng
+
+# 查看认证状态
 gh auth status           # 应显示已登录
+# 输出
+github.com
+  X Failed to log in to github.com account hanqunfeng (keyring)
+  - Active account: true
+  - The token in keyring is invalid.
+  - To re-authenticate, run: gh auth refresh -h github.com
+  - To forget about this account, run: gh auth logout -h github.com -u hanqunfeng
 ```
 
 ### 3. 脚本可执行权限（首次）
