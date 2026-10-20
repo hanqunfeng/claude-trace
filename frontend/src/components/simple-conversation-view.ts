@@ -2,7 +2,9 @@
  * @file Human-readable conversation renderer.
  *
  * Displays merged conversation threads with markdown formatting, tool call
- * previews, diffs, collapsible system prompts, and Codex-specific context tags.
+ * previews, diffs, and collapsible injected context: system prompts, Claude Code
+ * system-role turns, system reminders, local commands, Codex instructions, and
+ * Codex context tags.
  */
 
 import { LitElement, html, TemplateResult } from "lit";
@@ -121,54 +123,78 @@ export class SimpleConversationView extends LitElement {
 		}
 
 		if (Array.isArray(content)) {
-			return html`
-				${content.map((block) => {
-					if (block.type === "text") {
-						return this.formatStringContent(block.text);
-					} else if (block.type === "thinking") {
-						const thinkingBlock = block as any;
-						return this.renderThinkingBlock(thinkingBlock.thinking || "");
-					} else if (block.type === "tool_result") {
-						// Skip standalone tool_result blocks - they will be paired with tool_use
-						return html``;
-					} else if (block.type === "tool_use") {
-						const toolUse = block as any;
-						const toolResult = toolResults?.[toolUse.id];
+			const rendered: TemplateResult[] = [];
+			let textRun: string[] = [];
+			const flushText = () => {
+				if (textRun.length === 0) {
+					return;
+				}
+				rendered.push(this.formatTextGroup(textRun));
+				textRun = [];
+			};
 
-						if (block.name === "TodoWrite" || block.name === "Edit" || block.name === "MultiEdit") {
-							return this.renderToolContainer(block, toolResult);
-						}
-						if (block.name === "Write") {
-							const customContent = html`
-								<div class="bg-vs-bg-secondary p-4 text-vs-text hidden">
-									${this.renderToolUseContent(block)}
-								</div>
-								<div
-									class="bg-vs-bg-secondary mx-4 p-4 text-vs-text cursor-pointer hover:bg-vs-border transition-colors"
-									@click=${this.toggleWriteContent}
-								>
-									${this.renderWritePreview(block)}
-								</div>
-							`;
-							return html`
-								<div class="mt-4 mb-4">
-									<div class="text-vs-type px-4 break-all">${this.getToolDisplayName(block)}</div>
-									${customContent} ${toolResult ? this.renderToolResult(toolResult, block) : ""}
-								</div>
-							`;
-						}
-						return this.renderToolContainer(block, toolResult, {
-							isCollapsible: true,
-							isCollapsed: true,
-							isClickToExpand: true,
-						});
-					}
-					return html`<pre class="mb-4">${JSON.stringify(block, null, 2)}</pre>`;
-				})}
-			`;
+			for (const block of content) {
+				if (block.type === "text" && "text" in block) {
+					textRun.push(block.text);
+					continue;
+				}
+				flushText();
+				rendered.push(this.formatNonTextBlock(block, toolResults));
+			}
+			flushText();
+			return html`${rendered}`;
 		}
 
 		return html`<pre>${JSON.stringify(content, null, 2)}</pre>`;
+	}
+
+	/**
+	 * Renders one non-text content block (thinking, tool use, or unknown JSON).
+	 *
+	 * @param toolResults - Map of tool_use_id → tool_result hoisted by the processor.
+	 */
+	private formatNonTextBlock(block: ContentBlockParam, toolResults?: Record<string, any>): TemplateResult {
+		if (block.type === "thinking") {
+			const thinkingBlock = block as any;
+			return this.renderThinkingBlock(thinkingBlock.thinking || "");
+		}
+		if (block.type === "tool_result") {
+			// Standalone tool_result blocks are paired onto the matching tool_use.
+			return html``;
+		}
+		if (block.type === "tool_use") {
+			const toolUse = block as any;
+			const toolResult = toolResults?.[toolUse.id];
+
+			if (block.name === "TodoWrite" || block.name === "Edit" || block.name === "MultiEdit") {
+				return this.renderToolContainer(block, toolResult);
+			}
+			if (block.name === "Write") {
+				const customContent = html`
+					<div class="bg-vs-bg-secondary p-4 text-vs-text hidden">
+						${this.renderToolUseContent(block)}
+					</div>
+					<div
+						class="bg-vs-bg-secondary mx-4 p-4 text-vs-text cursor-pointer hover:bg-vs-border transition-colors"
+						@click=${this.toggleWriteContent}
+					>
+						${this.renderWritePreview(block)}
+					</div>
+				`;
+				return html`
+					<div class="mt-4 mb-4">
+						<div class="text-vs-type px-4 break-all">${this.getToolDisplayName(block)}</div>
+						${customContent} ${toolResult ? this.renderToolResult(toolResult, block) : ""}
+					</div>
+				`;
+			}
+			return this.renderToolContainer(block, toolResult, {
+				isCollapsible: true,
+				isCollapsed: true,
+				isClickToExpand: true,
+			});
+		}
+		return html`<pre class="mb-4">${JSON.stringify(block, null, 2)}</pre>`;
 	}
 
 	/**
@@ -268,8 +294,20 @@ export class SimpleConversationView extends LitElement {
 		{ tag: "environment_context", title: "Environment Context" },
 	];
 
+	/**
+	 * Codex puts its base agent prompt in a developer message that the adapter
+	 * surfaces as a user turn. It always starts with this sentence and is not user input.
+	 */
+	private isCodexBaseInstructions(content: string): boolean {
+		return content.trimStart().startsWith("You are Codex,");
+	}
+
 	/** True when the string contains only Codex context tags and no user text. */
 	private isCodexContextOnlyText(content: string): boolean {
+		if (this.isCodexBaseInstructions(content)) {
+			return true;
+		}
+
 		const { sections, remaining } = this.extractCodexContextSections(content);
 		if (sections.length === 0) {
 			return false;
@@ -311,24 +349,201 @@ export class SimpleConversationView extends LitElement {
 	}
 
 	/**
-	 * Parses a plain-text message: main markdown body plus collapsible sections
-	 * for Codex context tags, EXTREMELY_IMPORTANT, and system-reminder blocks.
+	 * Parses plain-text blocks: the user's own words stay visible, while Claude Code
+	 * and Codex injected context is grouped into collapsed sections.
 	 */
 	private formatStringContent(content: string): TemplateResult {
-		const { sections: codexContextSections, remaining: afterCodexContext } =
-			this.extractCodexContextSections(content);
-		const { blocks: extremelyImportantBlocks, remaining: afterExtremelyImportant } =
-			this.extractTaggedBlocks(afterCodexContext, "EXTREMELY_IMPORTANT");
-		const { blocks: systemReminderBlocks, remaining: mainContent } = this.extractTaggedBlocks(
-			afterExtremelyImportant,
-			"system-reminder",
-		);
+		return this.formatTextGroup([content]);
+	}
+
+	/**
+	 * Splits consecutive text blocks into the visible utterance and collapsed context.
+	 *
+	 * Claude Code prepends `<system-reminder>` blocks and local slash-command
+	 * transcripts to the same user message as the real prompt. Those are folded
+	 * so the conversation shows the user text first.
+	 *
+	 * @param texts - Consecutive text blocks from one message.
+	 */
+	private formatTextGroup(texts: string[]): TemplateResult {
+		const reminders: string[] = [];
+		const extremelyImportant: string[] = [];
+		const codexSections: Array<{ title: string; blocks: string[] }> = [];
+		const localDetails: string[] = [];
+		const commandNames: string[] = [];
+		const codexInstructions: string[] = [];
+		const visible: string[] = [];
+
+		for (const text of texts) {
+			const codex = this.extractCodexContextSections(text);
+			codexSections.push(...codex.sections);
+
+			const important = this.extractTaggedBlocks(codex.remaining, "EXTREMELY_IMPORTANT");
+			extremelyImportant.push(...important.blocks);
+
+			const reminder = this.extractTaggedBlocks(important.remaining, "system-reminder");
+			reminders.push(...reminder.blocks);
+
+			const local = this.extractLocalCommand(reminder.remaining);
+			if (local.name) {
+				commandNames.push(local.name);
+			}
+			if (local.detail) {
+				localDetails.push(local.detail);
+			}
+			const candidate = local.remaining.trim();
+			if (this.isCodexBaseInstructions(candidate)) {
+				codexInstructions.push(candidate);
+			} else if (candidate) {
+				visible.push(candidate);
+			}
+		}
+
+		const localTitle =
+			commandNames.length === 1 ? `Local Command · ${commandNames[0]}` : "Local Command";
 
 		return html`
-			${mainContent ? html`<div class="mt-4 markdown-content">${unsafeHTML(markdownToHtml(mainContent))}</div>` : ""}
-			${codexContextSections.map(({ title, blocks }) => this.renderTaggedCollapsibleSections(title, blocks))}
-			${this.renderTaggedCollapsibleSections("Extremely Important", extremelyImportantBlocks)}
-			${this.renderTaggedCollapsibleSections("System Reminder", systemReminderBlocks)}
+			${visible.map(
+				(text) => html`<div class="mt-4 markdown-content">${unsafeHTML(markdownToHtml(text))}</div>`,
+			)}
+			${codexSections.map(({ title, blocks }) => this.renderTaggedCollapsibleSections(title, blocks))}
+			${this.renderTaggedCollapsibleSections("Extremely Important", extremelyImportant)}
+			${this.renderTaggedCollapsibleSections("System Reminder", reminders)}
+			${codexInstructions.length > 0
+				? this.renderCollapsibleSection(
+						"Codex Instructions",
+						html`<div class="text-vs-muted markdown-content">${unsafeHTML(
+							markdownToHtml(codexInstructions.join("\n\n")),
+						)}</div>`,
+						{
+							titleClasses: "text-vs-muted",
+							containerClasses: "mt-4 mb-4",
+							count: codexInstructions.length > 1 ? codexInstructions.length : undefined,
+						},
+					)
+				: ""}
+			${localDetails.length > 0
+				? this.renderCollapsibleSection(
+						localTitle,
+						html`<div class="text-vs-muted markdown-content">${unsafeHTML(
+							markdownToHtml(localDetails.join("\n\n")),
+						)}</div>`,
+						{
+							titleClasses: "text-vs-muted",
+							containerClasses: "mt-4 mb-4",
+							count: commandNames.length > 1 ? commandNames.length : undefined,
+						},
+					)
+				: ""}
+		`;
+	}
+
+	/**
+	 * Pulls Claude Code local slash-command tags out of a user text block.
+	 *
+	 * @param content - Text that may contain `local-command-*` and `command-*` tags.
+	 * @returns Command name, folded detail markdown, and any leftover user text.
+	 */
+	private extractLocalCommand(content: string): { name: string; detail: string; remaining: string } {
+		const tags = [
+			"local-command-caveat",
+			"command-name",
+			"command-message",
+			"command-args",
+			"local-command-stdout",
+		] as const;
+		let remaining = content;
+		const pieces: string[] = [];
+		let name = "";
+
+		for (const tag of tags) {
+			const extracted = this.extractTaggedBlocks(remaining, tag);
+			remaining = extracted.remaining;
+			for (const block of extracted.blocks) {
+				const clean = this.stripAnsi(block).trim();
+				if (!clean) {
+					continue;
+				}
+				if (tag === "command-name") {
+					name = clean;
+					pieces.push(`Command: ${clean}`);
+				} else if (tag === "command-message") {
+					pieces.push(`Message: ${clean}`);
+				} else if (tag === "command-args") {
+					pieces.push(`Args: ${clean}`);
+				} else {
+					pieces.push(clean);
+				}
+			}
+		}
+
+		return { name, detail: pieces.join("\n\n"), remaining };
+	}
+
+	/** Removes ANSI color sequences so local-command output is readable. */
+	private stripAnsi(text: string): string {
+		return text.replace(/\u001b\[[0-9;]*m/g, "");
+	}
+
+	/**
+	 * One-line label for a collapsed system-role turn.
+	 *
+	 * Prefers a token-budget line or the first markdown heading, then the first
+	 * non-empty line.
+	 */
+	private summarizeSystemText(text: string): string {
+		const token = text.match(/<total_tokens>\s*([^<]+?)\s*<\/total_tokens>/);
+		if (token && text.replace(token[0], "").trim().length === 0) {
+			return token[1].trim();
+		}
+
+		const heading = text
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => /^#{1,3}\s+\S/.test(line));
+		if (heading) {
+			return heading.replace(/^#{1,3}\s+/, "").slice(0, 80);
+		}
+
+		const first =
+			text
+				.split("\n")
+				.map((line) => this.stripAnsi(line).replace(/<[^>]+>/g, "").trim())
+				.find(Boolean) ?? "context";
+		return first.length > 80 ? `${first.slice(0, 77)}…` : first;
+	}
+
+	/** Flattens a message body to plain text for system-role summaries. */
+	private flattenMessageText(content: string | ContentBlockParam[]): string {
+		if (typeof content === "string") {
+			return content;
+		}
+		return content
+			.map((block) => ("text" in block && typeof block.text === "string" ? block.text : ""))
+			.filter(Boolean)
+			.join("\n");
+	}
+
+	/**
+	 * Renders a `role: system` turn collapsed.
+	 *
+	 * Claude Code inserts environment, MCP, and token-budget messages between
+	 * user turns. The summary stays visible; the body opens on click.
+	 */
+	private renderSystemRoleMessage(message: MessageParam): TemplateResult {
+		const text = this.flattenMessageText(message.content);
+		const summary = this.summarizeSystemText(text);
+		return html`
+			<div class="mb-4">
+				${this.renderCollapsibleSection(
+					`System · ${summary}`,
+					html`<div class="text-vs-muted markdown-content">${unsafeHTML(markdownToHtml(text))}</div>`,
+					{
+						titleClasses: "text-vs-function",
+						containerClasses: "",
+					},
+				)}
+			</div>
 		`;
 	}
 
@@ -913,23 +1128,30 @@ ${typeof toolResult.content === "string" ? toolResult.content : JSON.stringify(t
 			<div class="px-4 mt-4">
 				${conversation.messages
 					.filter((message) => !(message as EnhancedMessageParam).hide)
-					.map(
-						(message, msgIndex) => html`
-							<div class="mb-4">
-								${this.isCodexContextOnlyMessage(message as EnhancedMessageParam)
-									? ""
-									: html`
-											<div
-												class="font-bold uppercase ${message.role === "user" ? "text-vs-user" : "text-vs-assistant"}"
-											>
-												<span>${message.role}</span>
-											</div>
-										`}
-								<div class="text-vs-text">
-									${this.formatContent(message.content, (message as EnhancedMessageParam).toolResults)}
-								</div>
-							</div>
-						`,
+					.map((message) =>
+						(message.role as string) === "system"
+							? this.renderSystemRoleMessage(message)
+							: html`
+									<div class="mb-4">
+										${this.isCodexContextOnlyMessage(message as EnhancedMessageParam)
+											? ""
+											: html`
+													<div
+														class="font-bold uppercase ${message.role === "user"
+															? "text-vs-user"
+															: "text-vs-assistant"}"
+													>
+														<span>${message.role}</span>
+													</div>
+												`}
+										<div class="text-vs-text">
+											${this.formatContent(
+												message.content,
+												(message as EnhancedMessageParam).toolResults,
+											)}
+										</div>
+									</div>
+								`,
 					)}
 
 				<!-- Assistant Response -->

@@ -11,7 +11,7 @@ Record API traffic from **Claude Code**, **OpenCode**, **Codex CLI**, and allowl
 This project supports **both**:
 
 - **Reverse proxy (built-in tool wrappers)**: `claude-trace`, `opencode-trace`, `codex-trace` start a local reverse proxy and launch the target tool with its upstream base URL redirected to the proxy (so traffic is logged automatically).
-- **Forward proxy (standalone)**: `vibe-coding-proxy` starts an HTTP/HTTPS forward proxy only. You must **export `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` before starting the client** you want to trace.
+- **Forward proxy (standalone)**: `vibe-coding-proxy` starts an HTTP/HTTPS forward proxy only, for clients that honor `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` (verified with Claude Code and OpenCode). Current Codex CLI model traffic ignores those variables; use `codex-trace` instead. Export the proxy variables in the same shell/session before starting the client.
 
 ## Supported tools
 
@@ -20,7 +20,7 @@ This project supports **both**:
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; **ChatGPT OAuth** & OpenAI API Key (Responses API) |
-| **Standalone proxy** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | Forward proxy via `HTTP_PROXY` / `HTTPS_PROXY`; allowlist-scoped HTTPS MITM |
+| **Standalone proxy** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | Forward proxy via `HTTP_PROXY` / `HTTPS_PROXY`; Claude Code and OpenCode only. Use `codex-trace` for Codex |
 
 All commands share the same HTML report UI, JSONL/JSON export, and `--index` conversation summarization.
 
@@ -328,17 +328,17 @@ Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
 - Built-in provider IDs (`openai`, `ollama`, `lmstudio`) cannot be overridden via `model_providers`; ChatGPT OAuth uses `chatgpt_base_url`, API Key mode uses `openai_base_url`.
 - **Ollama / LM Studio** built-in providers are not intercepted (traffic bypasses the proxy).
 - Older `auth.json` files without `auth_mode` fall back to legacy heuristics; re-login with ChatGPT if OAuth routing misbehaves.
-- **Node.js:** Codex ChatGPT OAuth tracing works on **Node.js 16+** (the proxy forwards zstd request bodies unchanged). **Node.js 22+** is recommended so zstd-compressed request bodies are decompressed in logs and HTML; on Node 16–21, request entries show a placeholder instead of parsed JSON (responses and proxy behavior are unaffected).
+- **Node.js:** Codex ChatGPT OAuth tracing works on **Node.js 16+** (the proxy forwards zstd bodies unchanged). **Node.js 22+** is recommended so zstd-compressed request and response bodies are decompressed in logs and HTML (including OpenCode SSE with `content-encoding: zstd`); on Node 16–21 those entries show a placeholder instead of parsed content (proxy forwarding is unaffected).
 
 ---
 
 ## Standalone forward proxy (`vibe-coding-proxy`)
 
-`vibe-coding-proxy` starts only the proxy service. It does not spawn Claude Code, OpenCode, Codex, or any other client. Point any compatible CLI at the printed proxy URL with `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
+`vibe-coding-proxy` starts only the proxy service. It does not spawn Claude Code, OpenCode, or any other client. CLIs that honor `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` can send traffic to the printed proxy URL.
 
 ### Compatibility & usage order
 
-- **Tested clients**: Claude Code, OpenCode, Codex CLI. Other clients may work if they respect standard proxy env vars, but are not tested yet.
+- **Tested clients**: Claude Code and OpenCode. **Codex CLI is not supported**: current Codex connects directly to `base_url` when no system proxy is configured, and ignores those environment variables, so model requests never reach this proxy. Use `codex-trace` to record Codex. Other clients that honor the variables may work, but are not tested yet.
 - **Order matters**: start `vibe-coding-proxy` → export env vars in the same shell/session → then start your client/tool. If you start the client first, it may not pick up the proxy settings.
 
 ### Usage
@@ -373,7 +373,7 @@ Logs: `.vibe-coding-proxy/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the curr
 
 HTTPS requests sent through `HTTPS_PROXY` normally use `CONNECT host:443`, which hides JSON bodies from the proxy. To log request/response bodies, `vibe-coding-proxy` performs MITM only for `--target-url` / `--mitm-host` allowlist entries and prints a local CA certificate path.
 
-Trust that CA only in clients whose model traffic you want to inspect. The command never installs the CA into your system trust store automatically. `NODE_TLS_REJECT_UNAUTHORIZED=0` only helps Node.js clients; Codex ChatGPT OAuth is a Rust client and may require `SSL_CERT_FILE` or OS-level trust for the printed CA. Non-allowlisted HTTPS traffic is passed through as a raw CONNECT tunnel and only logged as metadata when `--include-all-requests` is enabled.
+Trust that CA only in clients whose model traffic you want to inspect. The command never installs the CA into your system trust store automatically. `NODE_TLS_REJECT_UNAUTHORIZED=0` only helps Node.js clients. Non-allowlisted HTTPS traffic is passed through as a raw CONNECT tunnel and only logged as metadata when `--include-all-requests` is enabled.
 
 ### Local CA lifecycle
 

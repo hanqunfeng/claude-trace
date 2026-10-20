@@ -181,12 +181,13 @@ function getRequestContentEncoding(headers: IncomingHttpHeaders): string {
 }
 
 /**
- * Decompresses a request body buffer when Codex (or other clients) send compressed JSON.
+ * Decompresses a body buffer for logging.
  *
- * Supports zstd (Codex ChatGPT OAuth), gzip, br, and deflate. Returns the original
- * buffer when encoding is absent or decompression is unavailable/fails.
+ * Supports zstd (Node 22+; Codex request bodies and OpenCode/DeepSeek SSE responses),
+ * gzip, br, and deflate. Returns the original buffer when encoding is absent or
+ * decompression is unavailable/fails. Callers still forward the original bytes.
  *
- * @param buffer - Raw request body bytes from the client.
+ * @param buffer - Raw body bytes.
  * @param contentEncoding - Lowercase `Content-Encoding` header value.
  */
 function decompressRequestBodyBuffer(buffer: Buffer, contentEncoding: string): Buffer {
@@ -265,6 +266,39 @@ function parseRequestBodyForLog(headers: IncomingHttpHeaders, buffer: Buffer): u
 		}
 		return text;
 	}
+}
+
+/**
+ * Decodes an upstream response body for logging without altering the bytes sent to the client.
+ *
+ * OpenCode 1.19+ advertises `accept-encoding: zstd`, and some providers compress SSE with
+ * `content-encoding: zstd`. Those bytes must be decompressed before SSE parsing; otherwise
+ * the log stores an empty assistant message.
+ *
+ * @param buffer - Raw upstream response bytes.
+ * @param contentEncoding - Lowercase `Content-Encoding` header value.
+ * @returns UTF-8 text, or `unavailableEncoding` when a known codec could not be decoded.
+ */
+function decodeResponseBodyForLog(
+	buffer: Buffer,
+	contentEncoding: string,
+): { text: string; unavailableEncoding?: string } {
+	if (!buffer.length) {
+		return { text: "" };
+	}
+
+	const decoded = decompressRequestBodyBuffer(buffer, contentEncoding);
+	const knownEncoding =
+		contentEncoding === "zstd" ||
+		contentEncoding === "gzip" ||
+		contentEncoding === "br" ||
+		contentEncoding === "deflate";
+	// Same buffer reference means decompression was skipped or failed.
+	if (knownEncoding && decoded === buffer) {
+		return { text: "", unavailableEncoding: contentEncoding };
+	}
+
+	return { text: decoded.toString("utf-8") };
 }
 
 /**
@@ -684,7 +718,7 @@ export class ReverseProxyServer {
 	/**
 	 * Parses, normalizes, and persists a completed request/response exchange.
 	 *
-	 * Decompresses gzip/brotli/deflate bodies before parsing. Converts OpenAI and
+	 * Decompresses gzip, brotli, deflate, and zstd bodies before parsing. Converts OpenAI and
 	 * Anthropic streaming responses into structured message objects when possible.
 	 *
 	 * @param req - Original client request (used for URL and method).
@@ -720,26 +754,19 @@ export class ReverseProxyServer {
 		const parsedRequestBody = parseRequestBodyForLog(req.headers, requestBody);
 
 		const rawBuffer = Buffer.concat(responseChunks);
-		let responseBody: string;
 		const contentEncoding = (proxyRes.headers["content-encoding"] || "").toLowerCase();
-
-		// Upstream may compress responses even though we proxy as plain HTTP locally.
-		try {
-			if (contentEncoding === "gzip") {
-				responseBody = zlib.gunzipSync(rawBuffer).toString("utf-8");
-			} else if (contentEncoding === "br") {
-				responseBody = zlib.brotliDecompressSync(rawBuffer).toString("utf-8");
-			} else if (contentEncoding === "deflate") {
-				responseBody = zlib.inflateSync(rawBuffer).toString("utf-8");
-			} else {
-				responseBody = rawBuffer.toString("utf-8");
-			}
-		} catch {
-			responseBody = rawBuffer.toString("utf-8");
-		}
+		// Decode a log copy only. The client still receives the original compressed stream.
+		const decodedResponse = decodeResponseBodyForLog(rawBuffer, contentEncoding);
 
 		const apiFormat = this.resolveResponseApiFormat(req.url, upstreamUrl, modelRoute);
-		const parsedResponseBody = this.parseResponseBody(proxyRes, responseBody, apiFormat, parsedRequestBody);
+		const parsedResponseBody = decodedResponse.unavailableEncoding
+			? {
+					body: {
+						_note: `${decodedResponse.unavailableEncoding} compressed response body`,
+						byteLength: rawBuffer.length,
+					},
+				}
+			: this.parseResponseBody(proxyRes, decodedResponse.text, apiFormat, parsedRequestBody);
 		const pair: RawPair = {
 			request: {
 				timestamp: requestTimestamp / 1000,

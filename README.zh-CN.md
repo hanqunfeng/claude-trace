@@ -11,7 +11,7 @@
 本项目同时支持 **两种代理模式**：
 
 - **反向代理（内置工具封装）**：`claude-trace`、`opencode-trace`、`codex-trace` 会启动本地反向代理，并在启动目标工具时把其上游 base URL 重定向到代理（因此可以自动记录流量）。
-- **正向代理（独立代理）**：`vibe-coding-proxy` 只启动 HTTP/HTTPS 正向代理。你需要在启动要追踪的客户端之前，先在同一个 shell/session 中 **导出 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`**。
+- **正向代理（独立代理）**：`vibe-coding-proxy` 只启动 HTTP/HTTPS 正向代理，供会遵守 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 的客户端使用（已验证 Claude Code、OpenCode）。当前 Codex CLI 的模型请求不走这些环境变量，请改用 `codex-trace`。使用前须在同一个 shell/session 中先导出代理变量。
 
 ## 支持的工具
 
@@ -20,7 +20,7 @@
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式 |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | 反向代理（`CODEX_HOME` 覆盖）；**ChatGPT OAuth** 与 OpenAI API Key（Responses API） |
-| **独立代理** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | 通过 `HTTP_PROXY` / `HTTPS_PROXY` 使用正向代理；仅对 allowlist 目标做 HTTPS MITM |
+| **独立代理** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | 正向代理（`HTTP_PROXY` / `HTTPS_PROXY`）；仅 Claude Code 与 OpenCode。Codex 请用 `codex-trace` |
 
 三条命令共用同一套 HTML 报告界面、JSONL/JSON 导出，以及 `--index` 会话摘要功能。
 
@@ -328,17 +328,17 @@ Codex CLI  →  codex-trace 代理（记录）  →  chatgpt.com（OAuth）/ api
 - 内置 provider ID（`openai`、`ollama`、`lmstudio`）不能通过 `model_providers` 覆盖；ChatGPT OAuth 使用 `chatgpt_base_url`，API Key 模式使用 `openai_base_url`。
 - **Ollama / LM Studio** 内置 provider 不会被拦截（流量绕过代理）。
 - 旧版 `auth.json` 若无 `auth_mode` 字段，会回退到旧启发式；若 OAuth 路由异常，请重新用 ChatGPT 登录。
-- **Node.js：** Codex ChatGPT OAuth 追踪在 **Node.js 16+** 即可正常使用（代理原样转发 zstd 请求体）。建议 **Node.js 22+**，以便在日志与 HTML 中解压展示 zstd 压缩的请求体；Node 16–21 下请求条目会显示占位符而非解析后的 JSON（响应解析与代理行为不受影响）。
+- **Node.js：** Codex ChatGPT OAuth 追踪在 **Node.js 16+** 即可正常使用（代理原样转发 zstd 体）。建议 **Node.js 22+**，以便在日志与 HTML 中解压展示 zstd 压缩的请求体和响应体（例如 OpenCode 收到的 `content-encoding: zstd` SSE）；Node 16–21 下这些条目会显示占位符而非解析后的内容（代理转发不受影响）。
 
 ---
 
 ## 独立正向代理（`vibe-coding-proxy`）
 
-`vibe-coding-proxy` 只启动代理服务，不启动 Claude Code、OpenCode、Codex 或其他客户端。任意兼容 CLI 都可以通过 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 指向启动后打印的代理 URL。
+`vibe-coding-proxy` 只启动代理服务，不启动 Claude Code、OpenCode 或其他客户端。会遵守 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 的 CLI 可以把流量指到启动后打印的代理 URL。
 
 ### 兼容性与使用顺序
 
-- **已测试通过的客户端**：Claude Code、OpenCode、Codex CLI。其他客户端若遵循标准代理环境变量，理论上也可能可用，但目前未做测试。
+- **已测试通过的客户端**：Claude Code、OpenCode。**不支持 Codex CLI**：当前 Codex 在未配置系统代理时会直连 `base_url`，忽略上述环境变量，模型请求不会进入本代理。记录 Codex 请使用 `codex-trace`。其他会遵守这些环境变量的客户端理论上可用，但尚未测试。
 - **必须先设环境变量再启动**：先启动 `vibe-coding-proxy` → 在同一个 shell/session 里导出环境变量 → 再启动客户端/工具。若先启动客户端，它可能不会读取到新的代理设置。
 
 ### 用法
@@ -373,7 +373,7 @@ export SSL_CERT_FILE=CA_CERT_PATH
 
 通过 `HTTPS_PROXY` 发送的 HTTPS 请求通常先发起 `CONNECT host:443`，代理无法直接看到 JSON body。为了记录请求/响应 body，`vibe-coding-proxy` 只会对 `--target-url` / `--mitm-host` allowlist 命中的目标执行 MITM，并打印本地 CA 证书路径。
 
-只应在你希望检查模型流量的客户端中信任该 CA。命令不会自动把 CA 安装到系统信任链。`NODE_TLS_REJECT_UNAUTHORIZED=0` 只对 Node.js 客户端有效；Codex ChatGPT OAuth 是 Rust 客户端，通常需要 `SSL_CERT_FILE` 或操作系统级信任该 CA。未命中 allowlist 的 HTTPS 流量会作为原始 CONNECT 隧道透传，仅在开启 `--include-all-requests` 时记录元数据。
+只应在你希望检查模型流量的客户端中信任该 CA。命令不会自动把 CA 安装到系统信任链。`NODE_TLS_REJECT_UNAUTHORIZED=0` 只对 Node.js 客户端有效。未命中 allowlist 的 HTTPS 流量会作为原始 CONNECT 隧道透传，仅在开启 `--include-all-requests` 时记录元数据。
 
 ### 本地 CA 生命周期
 
