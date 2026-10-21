@@ -18,7 +18,7 @@ This project supports **both**:
 | Tool | CLI command | Log directory | Interception |
 |------|-------------|---------------|--------------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
-| **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats |
+| **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats. OpenCode 1.x only — for 2.0+ use `vibe-coding-proxy` + `opencode --standalone` |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; **ChatGPT OAuth** & OpenAI API Key (Responses API) |
 | **Standalone proxy** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | Forward proxy via `HTTP_PROXY` / `HTTPS_PROXY`; Claude Code and OpenCode only. Use `codex-trace` for Codex |
 
@@ -190,6 +190,34 @@ opencode-trace --help
 
 Logs: `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current directory. Proxy runtime errors are appended to `.opencode-trace/proxy-errors.log`.
 
+> **OpenCode 2.0+:** `opencode-trace` only supports OpenCode **1.x**. For OpenCode 2.0+, use the standalone forward proxy (`vibe-coding-proxy`) and start OpenCode with `opencode --standalone`. See [OpenCode 2.x](#opencode-2x-forward-proxy-only).
+
+### OpenCode 2.x (forward proxy only)
+
+OpenCode 2.x sends model requests from a shared background service instead of the `opencode` process you launch. That service does not inherit environment variables from your shell, and `OPENCODE_CONFIG_CONTENT` is not reliably honored, so the `opencode-trace` reverse proxy cannot redirect its traffic.
+
+Use `vibe-coding-proxy` instead, and always start OpenCode with **`--standalone`** so the server runs inside the current process and picks up the proxy variables:
+
+```bash
+# Terminal 1: start the forward proxy (replace with your provider host)
+vibe-coding-proxy --mitm-host api.deepseek.com --port 8888
+
+# Terminal 2: export the variables printed by vibe-coding-proxy, then:
+export HTTP_PROXY=http://127.0.0.1:8888
+export HTTPS_PROXY=http://127.0.0.1:8888
+export NO_PROXY=localhost,127.0.0.1,::1
+export NODE_EXTRA_CA_CERTS=~/.claude-trace/vibe-coding-proxy-ca/ca.crt
+
+opencode --standalone
+# or one-shot:
+opencode --standalone run "Explain async/await"
+```
+
+- `NO_PROXY` must include loopback addresses: the OpenCode client talks to its server over local HTTP.
+- `NODE_EXTRA_CA_CERTS` is how OpenCode 2.x trusts the local MITM CA (see [HTTPS logging and CA trust](#https-logging-and-ca-trust)).
+- Without `--standalone`, an already-running background service keeps sending requests directly to the provider and nothing is logged.
+- Logs are written to `.vibe-coding-proxy/`, not `.opencode-trace/`.
+
 ### How interception works
 
 OpenCode is a native binary. `opencode-trace` starts a local reverse proxy and injects a runtime config override via `OPENCODE_CONFIG_CONTENT` — **your original `opencode.json` is never modified**.
@@ -247,6 +275,7 @@ Use this when a model is not routed correctly, requests are missing from the log
 
 - **Conversation view** supports Anthropic-format (`@ai-sdk/anthropic`) and OpenAI-format (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) providers; complex fields (multimodal, reasoning, etc.) may only appear fully in Raw/JSON views.
 - Built-in `models.dev` providers not defined in your `opencode.json` are not intercepted yet.
+- OpenCode 2.0+ is not supported by `opencode-trace`; use `vibe-coding-proxy` with `opencode --standalone` (see [OpenCode 2.x](#opencode-2x-forward-proxy-only)).
 
 ---
 
@@ -340,6 +369,7 @@ Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
 
 - **Tested clients**: Claude Code and OpenCode. **Codex CLI is not supported**: current Codex connects directly to `base_url` when no system proxy is configured, and ignores those environment variables, so model requests never reach this proxy. Use `codex-trace` to record Codex. Other clients that honor the variables may work, but are not tested yet.
 - **Order matters**: start `vibe-coding-proxy` → export env vars in the same shell/session → then start your client/tool. If you start the client first, it may not pick up the proxy settings.
+- **OpenCode 2.0+**: this is the only supported way to record OpenCode 2.x. Start it with `opencode --standalone`, and also set `NO_PROXY=localhost,127.0.0.1,::1` and `NODE_EXTRA_CA_CERTS` to the CA path (see [OpenCode 2.x](#opencode-2x-forward-proxy-only)).
 
 ### Usage
 

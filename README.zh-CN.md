@@ -18,7 +18,7 @@
 | 工具 | CLI 命令 | 日志目录 | 拦截方式 |
 |------|----------|----------|----------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
-| **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式 |
+| **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式。仅支持 OpenCode 1.x，2.0+ 请用 `vibe-coding-proxy` + `opencode --standalone` |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | 反向代理（`CODEX_HOME` 覆盖）；**ChatGPT OAuth** 与 OpenAI API Key（Responses API） |
 | **独立代理** | `vibe-coding-proxy` | `.vibe-coding-proxy/` | 正向代理（`HTTP_PROXY` / `HTTPS_PROXY`）；仅 Claude Code 与 OpenCode。Codex 请用 `codex-trace` |
 
@@ -190,6 +190,33 @@ opencode-trace --help
 
 日志路径：当前目录 `.opencode-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}`。代理运行时错误追加写入 `.opencode-trace/proxy-errors.log`。
 
+> **OpenCode 2.0+：** `opencode-trace` 仅支持 OpenCode **1.x**。OpenCode 2.0+ 只能使用独立正向代理（`vibe-coding-proxy`），并且需要用 `opencode --standalone` 启动 OpenCode。详见下方「OpenCode 2.x（仅支持正向代理）」一节。
+
+### OpenCode 2.x（仅支持正向代理）
+
+OpenCode 2.x 的模型请求由共享的后台服务发出，而不是你启动的 `opencode` 进程。后台服务不会继承当前 shell 的环境变量，`OPENCODE_CONFIG_CONTENT` 也无法可靠生效，因此 `opencode-trace` 的反向代理无法重定向它的流量。
+
+请改用 `vibe-coding-proxy`，并且始终用 **`--standalone`** 启动 OpenCode，让服务运行在当前进程内，从而读取到代理环境变量：
+
+```bash
+# 终端 1：启动正向代理（替换为你实际使用的 provider 域名）
+vibe-coding-proxy --mitm-host api.deepseek.com --port 8888
+
+# 终端 2：导出 vibe-coding-proxy 打印的环境变量，然后：
+export HTTP_PROXY=http://127.0.0.1:8888
+export HTTPS_PROXY=http://127.0.0.1:8888
+export ALL_PROXY=http://127.0.0.1:8888
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+export SSL_CERT_FILE=/Users/hanqf/.claude-trace/vibe-coding-proxy-ca/ca.crt
+
+opencode --standalone
+# 或单次执行：
+opencode --standalone run "Explain async/await"
+```
+
+- 不加 `--standalone` 时，已在运行的后台服务会继续直连 provider，不会记录任何请求。
+- 日志写入 `.vibe-coding-proxy/`，而不是 `.opencode-trace/`。
+
 ### 拦截原理
 
 OpenCode 为原生二进制。`opencode-trace` 启动本地反向代理，并通过 `OPENCODE_CONFIG_CONTENT` 注入运行时配置覆盖——**不会修改原始 `opencode.json`**。
@@ -247,6 +274,7 @@ OPENCODE_TRACE_DEBUG=1 opencode-trace
 
 - **对话视图**支持 Anthropic 格式（`@ai-sdk/anthropic`）与 OpenAI 格式（`@ai-sdk/openai-compatible`、`@ai-sdk/openai`）provider；复杂字段（多模态、reasoning 等）可能仅在 Raw/JSON 视图中完整展示。
 - 尚未拦截未在 `opencode.json` 中定义的内置 `models.dev` provider。
+- `opencode-trace` 不支持 OpenCode 2.0+；请使用 `vibe-coding-proxy` 并以 `opencode --standalone` 启动（见上方「OpenCode 2.x（仅支持正向代理）」一节）。
 
 ---
 
@@ -340,6 +368,7 @@ Codex CLI  →  codex-trace 代理（记录）  →  chatgpt.com（OAuth）/ api
 
 - **已测试通过的客户端**：Claude Code、OpenCode。**不支持 Codex CLI**：当前 Codex 在未配置系统代理时会直连 `base_url`，忽略上述环境变量，模型请求不会进入本代理。记录 Codex 请使用 `codex-trace`。其他会遵守这些环境变量的客户端理论上可用，但尚未测试。
 - **必须先设环境变量再启动**：先启动 `vibe-coding-proxy` → 在同一个 shell/session 里导出环境变量 → 再启动客户端/工具。若先启动客户端，它可能不会读取到新的代理设置。
+- **OpenCode 2.0+**：这是记录 OpenCode 2.x 的唯一方式。必须用 `opencode --standalone` 启动
 
 ### 用法
 

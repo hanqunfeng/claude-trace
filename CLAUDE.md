@@ -63,6 +63,8 @@ Proxy mode sets `ANTHROPIC_BASE_URL` to the local proxy. If `~/.claude/settings.
 
 OpenCode always uses **reverse proxy mode** (no V1 fetch hook). Config lookup: `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, `~/.config/opencode/opencode.json`, `.opencode/opencode.json`. Runtime `OPENCODE_CONFIG_CONTENT` overrides all provider `baseURL` values. Model-based routing supports Anthropic (`@ai-sdk/anthropic`) and OpenAI (`@ai-sdk/openai-compatible`, `@ai-sdk/openai`) via `src/adapt/openai-adapter.ts` and `src/routing/proxy-routing.ts`.
 
+**OpenCode 2.0+ is not supported by `opencode-trace`** (requests come from a shared background service that ignores injected env); document `vibe-coding-proxy` + `opencode --standalone` instead (README "OpenCode 2.x").
+
 Proxy runtime errors append to `.opencode-trace/proxy-errors.log`. Verbose stderr routing logs: `OPENCODE_TRACE_DEBUG=1` (also used by shared `traceDebug()` for Claude overlay messages).
 
 ## Codex CLI
