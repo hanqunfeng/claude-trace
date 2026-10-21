@@ -100,7 +100,7 @@ npm run publish:oidc:patch       # 升 patch 版本号, 自动创建 commit 和 
 3. `npm version patch` 升版本并创建 commit + tag
 4. 推送 commit 和 `vX.Y.Z` 标签
 5. 监控 GitHub Actions 工作流直到完成；`gh` 连接断开时按与 `git push` 相同的次数重新连接，工作流已失败则不再重试
-6. 验证 npm 注册表上的版本
+6. 再从本机查询 npm 注册表。查到目标版本时说明无需执行 Actions 日志里的复查命令；仍查不到时才打印复查命令
 
 ## 命令参考
 
@@ -195,7 +195,7 @@ Tag v3.0.10 does not match package.json version 3.0.9
 
 ### 注册表暂时查不到新版本
 
-`npm publish` 成功后，注册表可能要几分钟才能查到新版本。工作流仍会创建 GitHub Release，并在日志里给出警告。稍后执行：
+`npm publish` 成功后，注册表可能要几分钟才能查到新版本。工作流仍会创建 GitHub Release，并在日志里给出警告和复查命令。本地脚本随后会再查一次：查到目标版本时，会提示无需再执行那些命令；仍查不到时，再打印：
 
 ```bash
 npm view @hanqunfeng/claude-trace version

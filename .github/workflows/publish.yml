@@ -156,6 +156,7 @@ jobs:
             echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (version query; latest tag not updated yet)"
             exit 0
           fi
-          echo "::warning::npm 注册表尚未同步到 ${VERSION}。包已发布，GitHub Release 已创建。可稍后执行下面的命令复查。"
-          echo "npm view @hanqunfeng/claude-trace version"
-          echo "npm view @hanqunfeng/claude-trace@${VERSION} version"
+          # gh run watch 的摘要只展示 ::warning::，普通 echo 不会出现在注解里。
+          echo "::warning::npm 注册表尚未同步到 ${VERSION}。包已发布，GitHub Release 已创建。"
+          echo "::warning::复查 latest：npm view @hanqunfeng/claude-trace version"
+          echo "::warning::复查该版本：npm view @hanqunfeng/claude-trace@${VERSION} version"

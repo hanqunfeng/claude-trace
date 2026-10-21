@@ -337,6 +337,7 @@ verify_publish() {
 		published=$(npm view "$PACKAGE" version --prefer-online 2>/dev/null || echo "")
 		if [[ "$published" == "$version" ]]; then
 			log "发布成功: $PACKAGE@$version"
+			log "本地已查到该版本，无需再执行 Actions 日志中的复查命令"
 			echo ""
 			echo "  npm:     https://www.npmjs.com/package/${PACKAGE#@}"
 			echo "  GitHub:  https://github.com/${GITHUB_REPO}/releases/tag/v${version}"
