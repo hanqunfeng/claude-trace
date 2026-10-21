@@ -108,30 +108,8 @@ jobs:
       - name: Publish to npm (OIDC)
         run: npm publish --access public
 
-      # 第十二步：轮询 npm 注册表，确认刚发布的版本已经可以公开查询。
-      # 先按 latest 标签查 20 次，每次间隔 3 秒。latest 可能滞后于具体版本，
-      # 因此 20 次都不匹配时，再按具体版本查一次，查到也算通过。
-      - name: Verify npm registry version
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          for attempt in $(seq 1 20); do
-            PUBLISHED=$(npm view @hanqunfeng/claude-trace version --prefer-online 2>/dev/null || true)
-            if [ "${PUBLISHED}" = "${VERSION}" ]; then
-              echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (latest)"
-              exit 0
-            fi
-            echo "Waiting for registry sync (${attempt}/20): npm=${PUBLISHED:-<none>} local=${VERSION}"
-            sleep 3
-          done
-          BY_VERSION=$(npm view "@hanqunfeng/claude-trace@${VERSION}" version --prefer-online 2>/dev/null || true)
-          if [ "${BY_VERSION}" = "${VERSION}" ]; then
-            echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (version query; latest tag not updated yet)"
-            exit 0
-          fi
-          echo "::error::Registry version mismatch after publish"
-          exit 1
-
-      # 第十三步：为同一个标签创建 GitHub Release。
+      # 第十二步：npm publish 成功后立即创建 GitHub Release。
+      # 新版本常要几分钟才能被公开查询，因此不拿注册表结果决定是否创建 Release。
       # 如果此前已经创建过 Release，则直接跳过，保证重复运行时不会报错。
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -158,3 +136,26 @@ jobs:
           ```
           EOF
           )"
+
+      # 第十三步：尽力确认注册表已经能查到新版本。查不到只警告，并给出稍后复查的命令。
+      # 先按 latest 标签查 20 次，每次间隔 3 秒；仍不匹配时再按具体版本查一次。
+      - name: Verify npm registry version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          for attempt in $(seq 1 20); do
+            PUBLISHED=$(npm view @hanqunfeng/claude-trace version --prefer-online 2>/dev/null || true)
+            if [ "${PUBLISHED}" = "${VERSION}" ]; then
+              echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (latest)"
+              exit 0
+            fi
+            echo "Waiting for registry sync (${attempt}/20): npm=${PUBLISHED:-<none>} local=${VERSION}"
+            sleep 3
+          done
+          BY_VERSION=$(npm view "@hanqunfeng/claude-trace@${VERSION}" version --prefer-online 2>/dev/null || true)
+          if [ "${BY_VERSION}" = "${VERSION}" ]; then
+            echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (version query; latest tag not updated yet)"
+            exit 0
+          fi
+          echo "::warning::npm 注册表尚未同步到 ${VERSION}。包已发布，GitHub Release 已创建。可稍后执行下面的命令复查。"
+          echo "npm view @hanqunfeng/claude-trace version"
+          echo "npm view @hanqunfeng/claude-trace@${VERSION} version"

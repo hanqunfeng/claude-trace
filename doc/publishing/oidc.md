@@ -158,8 +158,8 @@ claude-trace --help
 4. typecheck、单测、构建和 CLI smoke test
 5. 预览 npm 包内容
 6. 通过 OIDC 发布到 npm（自动生成 provenance）
-7. 验证 npm 注册表版本
-8. 创建 GitHub Release（自动生成变更说明）
+7. 创建 GitHub Release（自动生成变更说明）
+8. 查询 npm 注册表版本。尚未同步时只输出警告和复查命令，不让工作流失败
 
 ## 常见问题
 
@@ -193,9 +193,18 @@ Tag v3.0.10 does not match package.json version 3.0.9
 
 处理：升版本后重新发布，不要重复推送同一版本 tag。
 
+### 注册表暂时查不到新版本
+
+`npm publish` 成功后，注册表可能要几分钟才能查到新版本。工作流仍会创建 GitHub Release，并在日志里给出警告。稍后执行：
+
+```bash
+npm view @hanqunfeng/claude-trace version
+npm view @hanqunfeng/claude-trace@3.0.16 version
+```
+
 ### 需要补建 GitHub Release
 
-若通过 `workflow_dispatch` 发布了 npm 但未创建 Release：
+若 npm 已发布，但 Release 步骤本身失败：
 
 ```bash
 gh release create v3.0.10 \

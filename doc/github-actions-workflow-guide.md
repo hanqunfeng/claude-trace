@@ -2473,23 +2473,9 @@ run: npm publish --access public
 - Trusted Publishing 自动生成 provenance。
 - 执行发布前，npm 会运行本项目的 `prepublishOnly`，即再次 `clean` 和 `build`。
 
-### 25.10 注册表确认
+### 25.10 GitHub Release
 
-npm 发布接口成功后，公开查询可能有短暂延迟。工作流先按 `latest` 查询 20 次，每次等待 3 秒：
-
-```text
-npm view @hanqunfeng/claude-trace version
-```
-
-返回值与 `package.json.version` 一致即通过。`latest` 可能滞后于具体版本，因此 20 次都不匹配时，再按具体版本查一次：
-
-```text
-npm view @hanqunfeng/claude-trace@<version> version
-```
-
-这一次查到目标版本也算通过。
-
-### 25.11 GitHub Release
+`npm publish` 成功后立即创建 Release。新版本常要几分钟才能被公开查询，注册表结果不决定这一步是否执行。
 
 工作流先检查同标签 Release 是否已存在，因此 Release Step 自身重复执行时可以跳过已有 Release。不存在时：
 
@@ -2499,7 +2485,23 @@ npm view @hanqunfeng/claude-trace@<version> version
 
 GitHub CLI 使用本次运行自动生成的短期 `GITHUB_TOKEN`，无需 Personal Access Token。
 
-需要区分“重试 Release Step”和“重跑整个 Job”：整个 Job 并非幂等。版本已经成功发布后，重新运行会在 `npm publish` 处因版本已存在而失败，无法执行后面的 Release Step。若要支持发布恢复，工作流应在发布前查询目标版本；版本已存在时跳过 npm publish，并继续验证及创建缺失的 GitHub Release。
+### 25.11 注册表确认
+
+Release 创建之后，工作流再查询注册表。先按 `latest` 查询 20 次，每次等待 3 秒：
+
+```text
+npm view @hanqunfeng/claude-trace version
+```
+
+返回值与 `package.json.version` 一致即记录为已同步。`latest` 可能滞后于具体版本，因此 20 次都不匹配时，再按具体版本查一次：
+
+```text
+npm view @hanqunfeng/claude-trace@<version> version
+```
+
+这一次查到目标版本也记录为已同步。两次都查不到时，步骤输出警告和上面两条命令，并以成功状态结束。注册表延迟不让整个发布任务失败。
+
+需要区分“重试 Release Step”和“重跑整个 Job”：整个 Job 并非幂等。版本已经成功发布后，重新运行会在 `npm publish` 处因版本已存在而失败，无法执行后面的 Release Step。若要支持发布恢复，工作流应在发布前查询目标版本；版本已存在时跳过 npm publish，并继续创建缺失的 GitHub Release。
 
 ---
 

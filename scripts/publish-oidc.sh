@@ -348,7 +348,9 @@ verify_publish() {
 			sleep "$NETWORK_RETRY_DELAY"
 		fi
 	done
-	warn "npm 版本尚未同步到 $version，请稍后执行: npm view $PACKAGE version"
+	warn "npm 注册表尚未同步到 $version。包已发布。可稍后执行:"
+	warn "  npm view $PACKAGE version"
+	warn "  npm view ${PACKAGE}@${version} version"
 }
 
 # 输出已触发发布的标签、工作流文件和 GitHub Actions 页面地址。
