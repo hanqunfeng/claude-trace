@@ -228,7 +228,8 @@ push_git() {
 }
 
 # 等待标签对应的 publish.yml 工作流出现，并持续监控到运行结束。
-# 找不到运行时仅警告并返回；找到后工作流失败会使本地脚本以错误状态退出。
+# 找不到运行时仅警告并返回。监控连接断开时会重新连接；
+# 工作流已失败则不再重试，并以错误状态退出。
 watch_workflow() {
 	local tag="$1" run_id attempt=0
 	log "等待 GitHub Actions 工作流启动..."
@@ -256,12 +257,35 @@ watch_workflow() {
 	fi
 
 	log "监控工作流运行 #$run_id ..."
-	# --exit-status 使 gh 的退出状态与工作流结论一致，便于可靠判断发布是否成功。
-	if gh run watch "$run_id" --repo "$GITHUB_REPO" --exit-status; then
-		log "GitHub Actions 发布成功"
-	else
-		die "GitHub Actions 发布失败。查看日志: gh run view $run_id --repo $GITHUB_REPO --log-failed"
-	fi
+	# gh run watch 会因 API 连接被重置（EOF）而退出，此时工作流往往仍在运行。
+	# 与 git push 相同，最多重连 NETWORK_MAX_ATTEMPTS 次；已结束的失败运行不再重试。
+	local attempt state status conclusion
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		# --exit-status 使 gh 的退出状态与工作流结论一致。
+		if gh run watch "$run_id" --repo "$GITHUB_REPO" --exit-status; then
+			log "GitHub Actions 发布成功"
+			return 0
+		fi
+
+		state=$(gh run view "$run_id" --repo "$GITHUB_REPO" \
+			--json status,conclusion \
+			--jq '[.status // "", .conclusion // ""] | @tsv' 2>/dev/null || true)
+		status="${state%%$'\t'*}"
+		conclusion="${state#*$'\t'}"
+		if [[ "$status" == "completed" ]]; then
+			if [[ "$conclusion" == "success" ]]; then
+				log "GitHub Actions 发布成功"
+				return 0
+			fi
+			die "GitHub Actions 发布失败。查看日志: gh run view $run_id --repo $GITHUB_REPO --log-failed"
+		fi
+
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "监控连接断开，重新连接 ($attempt/$NETWORK_MAX_ATTEMPTS): run #$run_id"
+			sleep "$NETWORK_RETRY_DELAY"
+		fi
+	done
+	die "监控工作流 #$run_id 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）。查看日志: gh run view $run_id --repo $GITHUB_REPO --log-failed"
 }
 
 # 轮询 npm 注册表，确认 Actions 发布的 latest 版本已同步为本地版本。

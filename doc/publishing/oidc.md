@@ -99,7 +99,7 @@ npm run publish:oidc:patch       # 升 patch 版本号, 自动创建 commit 和 
 2. 运行 typecheck、单测、构建、pack 预览
 3. `npm version patch` 升版本并创建 commit + tag
 4. 推送 commit 和 `vX.Y.Z` 标签
-5. 监控 GitHub Actions 工作流直到完成
+5. 监控 GitHub Actions 工作流直到完成；`gh` 连接断开时按与 `git push` 相同的次数重新连接，工作流已失败则不再重试
 6. 验证 npm 注册表上的版本
 
 ## 命令参考
