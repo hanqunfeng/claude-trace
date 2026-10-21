@@ -2475,13 +2475,19 @@ run: npm publish --access public
 
 ### 25.10 注册表确认
 
-npm 发布接口成功后，公开查询可能有短暂延迟。工作流最多查询 10 次，每次等待 3 秒，确认：
+npm 发布接口成功后，公开查询可能有短暂延迟。工作流先按 `latest` 查询 20 次，每次等待 3 秒：
 
 ```text
 npm view @hanqunfeng/claude-trace version
 ```
 
-返回值与 `package.json.version` 一致。
+返回值与 `package.json.version` 一致即通过。`latest` 可能滞后于具体版本，因此 20 次都不匹配时，再按具体版本查一次：
+
+```text
+npm view @hanqunfeng/claude-trace@<version> version
+```
+
+这一次查到目标版本也算通过。
 
 ### 25.11 GitHub Release
 

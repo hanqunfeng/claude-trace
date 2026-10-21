@@ -108,20 +108,26 @@ jobs:
       - name: Publish to npm (OIDC)
         run: npm publish --access public
 
-      # 第十二步：轮询 npm 注册表，确认新版本已经可以公开查询。
-      # 注册表同步可能有短暂延迟，因此最多等待 10 次，每次间隔 3 秒。
+      # 第十二步：轮询 npm 注册表，确认刚发布的版本已经可以公开查询。
+      # 先按 latest 标签查 20 次，每次间隔 3 秒。latest 可能滞后于具体版本，
+      # 因此 20 次都不匹配时，再按具体版本查一次，查到也算通过。
       - name: Verify npm registry version
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          for attempt in $(seq 1 10); do
+          for attempt in $(seq 1 20); do
             PUBLISHED=$(npm view @hanqunfeng/claude-trace version --prefer-online 2>/dev/null || true)
             if [ "${PUBLISHED}" = "${VERSION}" ]; then
-              echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm"
+              echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (latest)"
               exit 0
             fi
-            echo "Waiting for registry sync (${attempt}/10): npm=${PUBLISHED:-<none>} local=${VERSION}"
+            echo "Waiting for registry sync (${attempt}/20): npm=${PUBLISHED:-<none>} local=${VERSION}"
             sleep 3
           done
+          BY_VERSION=$(npm view "@hanqunfeng/claude-trace@${VERSION}" version --prefer-online 2>/dev/null || true)
+          if [ "${BY_VERSION}" = "${VERSION}" ]; then
+            echo "Verified @hanqunfeng/claude-trace@${VERSION} on npm (version query; latest tag not updated yet)"
+            exit 0
+          fi
           echo "::error::Registry version mismatch after publish"
           exit 1
 
