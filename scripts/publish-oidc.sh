@@ -100,7 +100,9 @@ get_version_tag() {
 # gh 用于查找和监控由标签触发的 GitHub Actions 工作流。
 check_gh_auth() {
 	command -v gh >/dev/null 2>&1 || die "未安装 GitHub CLI。请安装: https://cli.github.com/"
-	gh auth status >/dev/null 2>&1 || die "GitHub CLI 未登录。请运行: gh auth login"
+	# 连接中断和未登录都会让 gh auth status 失败，因此按网络操作重试后再判定。
+	retry_network "gh auth status" gh auth status >/dev/null \
+		|| die "GitHub CLI 未登录或无法连接 GitHub。请运行: gh auth login"
 	log "GitHub CLI 已认证"
 }
 
@@ -136,11 +138,23 @@ check_remote_configured() {
 }
 
 # 将 package.json 版本与 npm 当前 latest 版本比较，阻止明显的重复发布。
-# 查询失败时按“未发布”处理，GitHub Actions 中的 npm publish 仍会校验版本唯一性。
+# 查询失败时重试；耗尽次数后继续发布，由 GitHub Actions 里的 npm publish 再校验版本唯一性。
 check_not_already_published() {
-	local version published
+	local version published attempt
 	version=$(get_package_version)
-	published=$(npm view "$PACKAGE" version 2>/dev/null || echo "")
+	published=""
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		if published=$(npm view "$PACKAGE" version --prefer-online 2>/dev/null); then
+			break
+		fi
+		published=""
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "查询 npm 版本失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS)"
+			sleep "$NETWORK_RETRY_DELAY"
+		else
+			warn "无法查询 npm 当前版本（已重试 $NETWORK_MAX_ATTEMPTS 次），继续发布"
+		fi
+	done
 	if [[ "$published" == "$version" ]]; then
 		die "版本 $version 已在 npm 上发布。请先用 patch/minor/major 升版本"
 	fi
@@ -197,15 +211,23 @@ ensure_local_tag() {
 }
 
 # 查询指定标签是否已存在于 origin。
-# 返回状态：0=标签存在，1=标签不存在，2=远程查询失败。
+# 返回状态：0=标签存在，1=标签不存在，2=远程查询在重试后仍然失败。
 remote_has_tag() {
-	local tag="$1" output
-	# 精确查询 refs/tags/<tag>，避免相似标签名称造成误判。
-	output=$(git ls-remote --tags origin "refs/tags/${tag}" 2>&1) || return 2
-	if echo "$output" | grep -q "refs/tags/${tag}"; then
-		return 0
-	fi
-	return 1
+	local tag="$1" output attempt
+	for ((attempt = 1; attempt <= NETWORK_MAX_ATTEMPTS; attempt++)); do
+		# 精确查询 refs/tags/<tag>，避免相似标签名称造成误判。
+		if output=$(git ls-remote --tags origin "refs/tags/${tag}" 2>&1); then
+			if echo "$output" | grep -q "refs/tags/${tag}"; then
+				return 0
+			fi
+			return 1
+		fi
+		if [[ $attempt -lt $NETWORK_MAX_ATTEMPTS ]]; then
+			log "查询远程 tag 失败，重试 ($attempt/$NETWORK_MAX_ATTEMPTS): $tag"
+			sleep "$NETWORK_RETRY_DELAY"
+		fi
+	done
+	return 2
 }
 
 # 先推送当前 release commit，再推送触发 publish.yml 的版本标签。
@@ -217,9 +239,15 @@ push_git() {
 		|| die "git push 失败（已重试 $NETWORK_MAX_ATTEMPTS 次）"
 
 	# 远端已有同名标签时不重复推送，避免 Git 拒绝并中断后续监控。
-	if remote_has_tag "$tag"; then
+	# set -e 下必须接住非零返回，否则查询失败会直接退出。
+	local remote_status=0
+	remote_has_tag "$tag" || remote_status=$?
+	if [[ $remote_status -eq 0 ]]; then
 		warn "远程 tag $tag 已存在，跳过 git push --tags"
 		return
+	fi
+	if [[ $remote_status -eq 2 ]]; then
+		die "无法确认远程 tag $tag 是否存在（已重试 $NETWORK_MAX_ATTEMPTS 次）"
 	fi
 
 	log "推送 tag $tag 到 origin..."
@@ -231,26 +259,36 @@ push_git() {
 # 找不到运行时仅警告并返回。监控连接断开时会重新连接；
 # 工作流已失败则不再重试，并以错误状态退出。
 watch_workflow() {
-	local tag="$1" run_id attempt=0
+	local tag="$1" run_id attempt=0 list_failed=0
 	log "等待 GitHub Actions 工作流启动..."
 	# GitHub 创建工作流记录可能有延迟，因此最多查询 30 次、每次等待 2 秒。
+	# 命令本身失败（例如 EOF）与“还没有这条运行”分开处理。
 	while ((attempt < 30)); do
 		# --branch 对标签运行同样可按标签名筛选；这里只取最新一条运行的数据库 ID。
-		run_id=$(gh run list \
+		if run_id=$(gh run list \
 			--repo "$GITHUB_REPO" \
 			--workflow "$WORKFLOW_FILE" \
 			--branch "$tag" \
 			--limit 1 \
 			--json databaseId,status,conclusion \
-			--jq '.[0].databaseId // empty' 2>/dev/null || true)
-		if [[ -n "$run_id" ]]; then
-			break
+			--jq '.[0].databaseId // empty' 2>/dev/null); then
+			list_failed=0
+			if [[ -n "$run_id" ]]; then
+				break
+			fi
+		else
+			list_failed=1
+			run_id=""
+			log "查询工作流失败，重试 ($((attempt + 1))/30)"
 		fi
 		sleep 2
 		((attempt += 1))
 	done
 
 	if [[ -z "$run_id" ]]; then
+		if [[ $list_failed -eq 1 ]]; then
+			die "无法查询 GitHub Actions（已重试 30 次）。请稍后查看: gh run list --repo $GITHUB_REPO --workflow $WORKFLOW_FILE"
+		fi
 		warn "未找到对应的工作流运行，请手动查看:"
 		warn "  gh run list --repo $GITHUB_REPO --workflow $WORKFLOW_FILE"
 		return 0
