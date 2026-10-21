@@ -88,14 +88,9 @@ chmod +x scripts/publish-oidc.sh
 ## 标准发布（推荐）
 
 ```bash
-# 补丁版本（最常用）
-npm run publish:oidc:patch
-
-# 或手动分步
-git checkout main
-git pull
-npm run publish:oidc:check    # 可选：本地检查
-npm run publish:oidc:patch      # 升版本 → 推送 tag → 监控 Actions
+npm run publish:oidc:check       # 可选：本地检查 typecheck/单测/构建/打包等
+npm run publish:oidc:dry-run     # 可选：全流程演练但不实际发布
+npm run publish:oidc:patch       # 升 patch 版本号, 自动创建 commit 和 tag, 推送到远端, 触发并监控 GitHub Actions
 ```
 
 脚本会自动：
