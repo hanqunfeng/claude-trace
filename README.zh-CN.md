@@ -16,7 +16,7 @@
 ## 支持的工具
 
 | 工具 | CLI 命令 | 日志目录 | 拦截方式 |
-|------|----------|----------|----------|
+|:-----|:---------|:---------|:---------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1：`fetch()` 钩子 · V2+：反向代理（`ANTHROPIC_BASE_URL`） |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | 反向代理 + 模型路由；支持 Anthropic 与 OpenAI 格式。仅支持 OpenCode 1.x，2.0+ 请用 `vibe-coding-proxy` + `opencode --standalone` |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | 反向代理（`CODEX_HOME` 覆盖）；**ChatGPT OAuth** 与 OpenAI API Key（Responses API） |
@@ -100,7 +100,7 @@ claude-trace --help
 ### CLI 选项
 
 | 参数 | 说明 |
-|------|------|
+|:-----|:-----|
 | `--include-all-requests` | 记录所有 API 流量，不仅限于 `/v1/messages` |
 | `--include-sensitive-headers` | 记录 auth token、cookie 等，不做脱敏 |
 | `--log NAME` | 自定义日志文件名（不含扩展名） |
@@ -116,7 +116,7 @@ claude-trace --help
 Claude Code V2 以**原生二进制**分发（macOS Mach-O / Linux ELF / Windows PE），不再是 Node.js 脚本。原有 `node --require interceptor claude` 方式已不可用。
 
 | Claude Code 版本 | 二进制类型 | 拦截模式 |
-|------------------|------------|----------|
+|:-----------------|:-----------|:---------|
 | V1.x | Node.js 脚本 | 通过 `--require` 注入 `interceptor-loader.js` |
 | **V2+** | 原生二进制 | 本地反向代理；重定向 `ANTHROPIC_BASE_URL` |
 
@@ -237,7 +237,7 @@ OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSe
 ### 支持的 API 格式
 
 | OpenCode `npm` 包 | API 格式 | 端点 | 对话视图标签 |
-|-------------------|----------|------|--------------|
+|:------------------|:---------|:-----|:-------------|
 | `@ai-sdk/anthropic` | Anthropic Messages | `/v1/messages` | Anthropic Messages |
 | `@ai-sdk/openai-compatible` | OpenAI Chat Completions | `/v1/chat/completions` | OpenAI Chat |
 | `@ai-sdk/openai` | OpenAI Responses | `/v1/responses` | OpenAI Responses |
@@ -247,7 +247,7 @@ OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSe
 ### CLI 选项
 
 | 参数 | 说明 |
-|------|------|
+|:-----|:-----|
 | `--opencode-path PATH` | OpenCode 二进制路径（省略则自动检测） |
 | `--include-all-requests` | 记录所有代理流量，不仅限于 messages 端点 |
 | `--include-sensitive-headers` | 不脱敏记录 auth 头 |
@@ -260,7 +260,7 @@ OpenCode  →  opencode-trace 代理（记录）  →  provider baseURL（DeepSe
 默认情况下运行时日志**静默输出**，避免污染 OpenCode TUI 输入框。
 
 | 输出内容 | 默认行为 | 设置 `OPENCODE_TRACE_DEBUG=1` 后 |
-|----------|----------|----------------------------------|
+|:---------|:---------|:---------------------------------|
 | 每次请求路由（model → provider → 上游 URL） | 不输出 | 打印到 stderr |
 | 代理错误（如上游 TLS 连接失败） | 写入 `.opencode-trace/proxy-errors.log` | 同时打印到 stderr |
 
@@ -307,7 +307,7 @@ codex-trace --help
 多数用户通过 **ChatGPT 登录** 使用 Codex（`codex login` 或 TUI 内登录）。`codex-trace` 读取 `~/.codex/auth.json`，当 `auth_mode` 为 `"chatgpt"` 时，将所有 LLM 流量路由到 ChatGPT OAuth 上游（`chatgpt.com/backend-api/codex`）——**即使 shell 中为其他工具设置了 `OPENAI_BASE_URL`**（如 Cursor、LiteLLM 等）也不受影响。
 
 | 检查项 | 预期 |
-|--------|------|
+|:-------|:-----|
 | 认证文件 | `~/.codex/auth.json` 含 `"auth_mode": "chatgpt"` |
 | 会话数据 | 从真实 `$CODEX_HOME` symlink，OAuth token 不会被改写 |
 | HTML 报告 | 多轮对话完整展示每条 assistant 回复，含最后一轮 |
@@ -342,7 +342,7 @@ Codex CLI  →  codex-trace 代理（记录）  →  chatgpt.com（OAuth）/ api
 ### CLI 选项
 
 | 参数 | 说明 |
-|------|------|
+|:-----|:-----|
 | `--codex-path PATH` | Codex 二进制路径（省略则自动检测） |
 | `--include-all-requests` | 记录所有代理流量，不仅限于 LLM API 路径 |
 | `--include-sensitive-headers` | 不脱敏记录认证头 |
@@ -412,7 +412,7 @@ export SSL_CERT_FILE=CA_CERT_PATH
 ### CLI 选项
 
 | 参数 | 说明 |
-|------|------|
+|:-----|:-----|
 | `--target-url URL` | 解密并完整记录的 URL 前缀（可重复） |
 | `--mitm-host HOST` | 解密并完整记录的主机名（可重复） |
 | `--host HOST` | 监听地址（默认 `127.0.0.1`） |
@@ -495,7 +495,7 @@ npm run test:unit
 维护者与贡献者文档位于 [`doc/`](doc/)：
 
 | 文档 | 说明 |
-|------|------|
+|:-----|:-----|
 | [doc/publishing/oidc.md](doc/publishing/oidc.md) | 推荐的 GitHub Actions OIDC npm 发布流程 |
 | [doc/publishing/access-token.md](doc/publishing/access-token.md) | 使用 npm Access Token 的本地发布（旧方式） |
 | [doc/github-actions-workflow-guide.md](doc/github-actions-workflow-guide.md) | GitHub Actions 工作流详解与示例 |

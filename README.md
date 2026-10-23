@@ -16,7 +16,7 @@ This project supports **both**:
 ## Supported tools
 
 | Tool | CLI command | Log directory | Interception |
-|------|-------------|---------------|--------------|
+|:-----|:------------|:--------------|:-------------|
 | **Claude Code** | `claude-trace` | `.claude-trace/` | V1: Node.js `fetch()` hook · V2+: reverse proxy via `ANTHROPIC_BASE_URL` |
 | **OpenCode** | `opencode-trace` | `.opencode-trace/` | Reverse proxy + model routing; Anthropic & OpenAI API formats. OpenCode 1.x only — for 2.0+ use `vibe-coding-proxy` + `opencode --standalone` |
 | **Codex CLI** | `codex-trace` | `.codex-trace/` | Reverse proxy via `CODEX_HOME` overlay; **ChatGPT OAuth** & OpenAI API Key (Responses API) |
@@ -100,7 +100,7 @@ Logs: `.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current d
 ### CLI options
 
 | Flag | Description |
-|------|-------------|
+|:-----|:------------|
 | `--include-all-requests` | Log all API traffic, not just `/v1/messages` |
 | `--include-sensitive-headers` | Log auth tokens and cookies without redaction |
 | `--log NAME` | Custom log file base name (without extension) |
@@ -116,7 +116,7 @@ Logs: `.claude-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current d
 Claude Code V2 ships as a **native binary** (Mach-O / ELF / PE), not a Node.js script. The original `node --require interceptor claude` approach no longer works.
 
 | Claude Code version | Binary type | Interception mode |
-|---------------------|-------------|-------------------|
+|:--------------------|:------------|:------------------|
 | V1.x | Node.js script | `interceptor-loader.js` via `--require` |
 | **V2+** | Native binary | Local reverse proxy; `ANTHROPIC_BASE_URL` redirected |
 
@@ -238,7 +238,7 @@ Config lookup order:
 ### Supported API formats
 
 | OpenCode `npm` package | API format | Endpoints | Conversation view label |
-|------------------------|------------|-----------|-------------------------|
+|:-----------------------|:-----------|:----------|:------------------------|
 | `@ai-sdk/anthropic` | Anthropic Messages | `/v1/messages` | Anthropic Messages |
 | `@ai-sdk/openai-compatible` | OpenAI Chat Completions | `/v1/chat/completions` | OpenAI Chat |
 | `@ai-sdk/openai` | OpenAI Responses | `/v1/responses` | OpenAI Responses |
@@ -248,7 +248,7 @@ The proxy reads `model` from each request body and routes to the matching provid
 ### CLI options
 
 | Flag | Description |
-|------|-------------|
+|:-----|:------------|
 | `--opencode-path PATH` | Path to OpenCode binary (auto-detected if omitted) |
 | `--include-all-requests` | Log all proxied API traffic, not just message endpoints |
 | `--include-sensitive-headers` | Log auth tokens without redaction |
@@ -261,7 +261,7 @@ The proxy reads `model` from each request body and routes to the matching provid
 By default, runtime logs are **silent** so they do not pollute OpenCode's TUI input area.
 
 | Output | Default | With `OPENCODE_TRACE_DEBUG=1` |
-|--------|---------|-------------------------------|
+|:-------|:--------|:------------------------------|
 | Per-request routing (model → provider → upstream) | Hidden | Printed to stderr |
 | Proxy errors (e.g. upstream TLS failure) | Written to `.opencode-trace/proxy-errors.log` | Also printed to stderr |
 
@@ -308,7 +308,7 @@ Logs: `.codex-trace/log-YYYY-MM-DD-HH-MM-SS.{jsonl,json,html}` in the current di
 Most users run Codex with **ChatGPT login** (`codex login` or the TUI sign-in flow). `codex-trace` reads `~/.codex/auth.json` and, when `auth_mode` is `"chatgpt"`, routes all LLM traffic to the ChatGPT OAuth upstream (`chatgpt.com/backend-api/codex`) — **even if `OPENAI_BASE_URL` is set in your shell** for other tools (Cursor, LiteLLM, etc.).
 
 | Check | Expected |
-|-------|----------|
+|:------|:---------|
 | Auth file | `~/.codex/auth.json` contains `"auth_mode": "chatgpt"` |
 | Session data | Symlinked from your real `$CODEX_HOME`; OAuth tokens are not rewritten |
 | HTML report | Multi-turn threads show each assistant reply, including the final turn |
@@ -343,7 +343,7 @@ Config lookup: `CODEX_HOME` (overlay) or `~/.codex/config.toml`.
 ### CLI options
 
 | Flag | Description |
-|------|-------------|
+|:-----|:------------|
 | `--codex-path PATH` | Path to Codex binary (auto-detected if omitted) |
 | `--include-all-requests` | Log all proxied API traffic, not just LLM API paths |
 | `--include-sensitive-headers` | Log auth tokens without redaction |
@@ -413,7 +413,7 @@ The local CA is reused across proxy runs from `~/.claude-trace/vibe-coding-proxy
 ### CLI options
 
 | Flag | Description |
-|------|-------------|
+|:-----|:------------|
 | `--target-url URL` | URL prefix to decrypt and fully log (repeatable) |
 | `--mitm-host HOST` | Hostname to decrypt and fully log (repeatable) |
 | `--host HOST` | Listen host (default `127.0.0.1`) |
@@ -496,7 +496,7 @@ npm run test:unit
 Maintainer and contributor docs live under [`doc/`](doc/):
 
 | Document | Description |
-|----------|-------------|
+|:---------|:------------|
 | [doc/publishing/oidc.md](doc/publishing/oidc.md) | Recommended npm release via GitHub Actions OIDC |
 | [doc/publishing/access-token.md](doc/publishing/access-token.md) | Legacy local release with npm Access Token |
 | [doc/github-actions-workflow-guide.md](doc/github-actions-workflow-guide.md) | GitHub Actions workflow reference and examples |
