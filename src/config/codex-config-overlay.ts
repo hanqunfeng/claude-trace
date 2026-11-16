@@ -364,6 +364,14 @@ export function syncCodexConfigOverlay(
 
 	fs.mkdirSync(overlayDir, { recursive: true });
 
+	// Codex's app-server daemon requires a real, writable directory in CODEX_HOME.
+	// A directory symlink into the user's original home causes startup to fail.
+	const daemonDir = path.join(overlayDir, "app-server-daemon");
+	if (fs.existsSync(daemonDir) && fs.lstatSync(daemonDir).isSymbolicLink()) {
+		fs.unlinkSync(daemonDir);
+	}
+	fs.mkdirSync(daemonDir, { recursive: true });
+
 	const sourceConfig = readCodexConfig(sourceHome);
 	const rewritten = rewriteConfigForProxy(sourceConfig, proxyUrl);
 	writeOverlayConfig(overlayDir, rewritten);
@@ -372,7 +380,7 @@ export function syncCodexConfigOverlay(
 	if (fs.existsSync(sourceHome)) {
 		for (const entry of fs.readdirSync(sourceHome)) {
 			// Config files are rewritten above; everything else is symlinked.
-			if (entry === CONFIG_FILE || entry.endsWith(".config.toml")) {
+			if (entry === CONFIG_FILE || entry === "app-server-daemon" || entry.endsWith(".config.toml")) {
 				continue;
 			}
 			tryLinkEntryWithResult(
