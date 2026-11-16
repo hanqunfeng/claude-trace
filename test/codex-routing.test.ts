@@ -336,6 +336,35 @@ describe("resolveCodexRouteTarget", () => {
  * local reverse proxy without modifying the user's original config directory.
  */
 describe("syncCodexConfigOverlay", () => {
+	it("keeps the app-server daemon directory local across initial and repeat syncs", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-daemon-overlay-"));
+		const sourceHome = path.join(root, "source");
+		const overlayDir = path.join(root, "overlay");
+		const sourceDaemon = path.join(sourceHome, "app-server-daemon");
+		const overlayDaemon = path.join(overlayDir, "app-server-daemon");
+		fs.mkdirSync(sourceDaemon, { recursive: true });
+		fs.writeFileSync(path.join(sourceHome, "auth.json"), "{}");
+
+		try {
+			const proxyUrl = "http://127.0.0.1:9999";
+			syncCodexConfigOverlay(sourceHome, overlayDir, proxyUrl);
+			assert.equal(fs.lstatSync(overlayDaemon).isDirectory(), true);
+			assert.equal(fs.lstatSync(overlayDaemon).isSymbolicLink(), false);
+			assert.equal(fs.lstatSync(path.join(overlayDir, "auth.json")).isSymbolicLink(), true);
+
+			// Simulate the broken symlink left by an earlier tracer version.
+			fs.rmSync(overlayDaemon, { recursive: true });
+			fs.symlinkSync(sourceDaemon, overlayDaemon, "dir");
+			syncCodexConfigOverlay(sourceHome, overlayDir, proxyUrl);
+			assert.equal(fs.lstatSync(overlayDaemon).isDirectory(), true);
+			assert.equal(fs.lstatSync(overlayDaemon).isSymbolicLink(), false);
+			assert.equal(fs.readdirSync(sourceDaemon).length, 0);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+
 	/**
 	 * All `*_base_url` keys and custom `model_providers.*.base_url` values
 	 * should be rewritten to the proxy URL. WebSocket support is disabled in
